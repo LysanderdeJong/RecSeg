@@ -185,4 +185,3 @@ dependencies:
     - scipy==1.7.2
     - setuptools-scm==6.3.2
     - tifffile==2021.11.2
-prefix: C:\Programs\miniconda3\envs\thesis
