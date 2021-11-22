@@ -22,8 +22,8 @@ class DiceLoss(nn.Module):
     def forward(self, input, target):
         if target.shape != input.shape:
             raise AssertionError(f"ground truth has different shape ({target.shape}) from input ({input.shape})")
-            
-        input = torch.softmax(input, 1)
+        
+        input = torch.softmax(input, dim=1)
             
         if not self.include_background:
             if n_pred_ch == 1:

@@ -1,12 +1,11 @@
 import os
 import argparse
 import torch
-from torch.utils.data import random_split, DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 
-from dataloader import skmtea
+from dataloader import DataModule
 from pl_model import UnetModule
 
 
@@ -21,15 +20,6 @@ def train(args):
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     pl.seed_everything(args.seed)
     os.makedirs(args.log_dir, exist_ok=True)
-    
-    # create dataloaders
-    train_fraction = 0.8
-    dataset = skmtea(args.data_root, args.mri_data_path, args.mask_data_path, seq_len=1)
-    print(f"Dataset size: {len(dataset)}.")
-    train, val = random_split(dataset, [int(train_fraction*len(dataset)), len(dataset)-(int(train_fraction*len(dataset)))])
-    
-    train_loader = DataLoader(train, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    val_loader = DataLoader(val, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # Create a PyTorch Lightning trainer
     callbacks = []
@@ -60,8 +50,10 @@ def train(args):
     trainer.logger._default_hp_metric = None
     trainer.logger._log_graph = False
     
-    # Create model
     dict_args = vars(args)
+    # Create dataloaders
+    pl_loader = DataModule(**dict_args)
+    # Create model
     model = UnetModule(**dict_args)
         
     if not args.progress_bar:
@@ -70,15 +62,18 @@ def train(args):
               "want to see the progress bar, use the argparse option \"progress_bar\".\n")
 
     # Training
-    with torch.autograd.set_detect_anomaly(True):
-        trainer.tune(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-        trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    # with torch.autograd.detect_anomaly():
+    trainer.tune(model, pl_loader)
+    trainer.fit(model, pl_loader)
     print(modelcheckpoint.best_model_path)
 
 
 if __name__ == '__main__':
     print("Check the Tensorboard to monitor training progress.")
     parser = argparse.ArgumentParser()
+    
+    # dataset hyperparameters
+    parser = DataModule.add_data_specific_args(parser)
 
     # Model hyperparameters
     parser = UnetModule.add_model_specific_args(parser)
@@ -102,20 +97,6 @@ if __name__ == '__main__':
     
     parser.add_argument('--checkpoint_path', default=None, type=str,
                         help='Continue training from this checkpoint.')
-    
-    # data paths
-    parser.add_argument('--data_root', default='data', type=str,
-                        help='Root directory where the dataset is stored.')
-    parser.add_argument('--mri_data_path', default='raw_data', type=str,
-                        help='Directory after the root where the mri data is stored.')
-    parser.add_argument('--mask_data_path', default='segmentation_masks', type=str,
-                        help='Directory after the root where the segmentation masks are stored')
-    
-    # data loader
-    parser.add_argument('--batch_size', default=5, type=int,
-                        help='Batch size for training.')
-    parser.add_argument('--num_workers', default=4, type=int,
-                        help='Number of processes used for loading the data.')
     
     # other hyperparameters
     parser.add_argument('--seed', default=42, type=int,

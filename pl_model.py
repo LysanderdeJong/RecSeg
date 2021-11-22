@@ -3,6 +3,7 @@ from torch import nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
 from argparse import ArgumentParser
+from einops import rearrange
 
 from model.unet import Unet
 from losses import DiceCELoss
@@ -46,11 +47,16 @@ class UnetModule(pl.LightningModule):
         self.criterion = DiceCELoss()
 
     def forward(self, x):
-        return self.unet(x)
+        x = F.group_norm(x, num_groups=1)
+        x = self.unet(x)
+        return x
     
     def step(self, batch, batch_indx=None):
         input, target = batch
         output = self(input)
+        if torch.any(torch.isnan(output)):
+            print(output)
+            raise ValueError
         loss = self.criterion(output, target)
         return loss, output
 
