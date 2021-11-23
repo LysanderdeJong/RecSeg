@@ -67,12 +67,12 @@ class UnetModule(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         loss, output = self.step(batch, batch_idx)
-        self.log("val_loss", loss.detach())
+        self.log("val_loss", loss)
         return loss
 
     def test_step(self, batch, batch_idx):
         loss, output = self.step(batch, batch_idx)
-        self.log("test_loss", loss.detach())
+        self.log("test_loss", loss)
         return loss
     
     def predict_step(self, batch, batch_idx, dataloader_idx):
@@ -94,7 +94,7 @@ class UnetModule(pl.LightningModule):
 
         # network params
         parser.add_argument(
-            "--in_chans", default=1, type=int, help="Number of U-Net input channels"
+            "--in_chans", default=2, type=int, help="Number of U-Net input channels"
         )
         parser.add_argument(
             "--out_chans", default=7, type=int, help="Number of U-Net output chanenls"

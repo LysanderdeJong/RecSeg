@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 from torch.utils.data import random_split, DataLoader
 import pickle
 import nibabel as nib
+from fastmri.data.transforms import to_tensor
 from einops import rearrange
 
 from utils import convert_mask
@@ -75,10 +76,10 @@ class skmtea(Dataset):
         mri = h5py.File(mri_path, 'r', libver='latest')['target'][:, :, mri_slice:mri_slice+self.seq_len, 0, :]
         mask = np.array(nib.load(mask_path).dataobj[:, :, mask_slice:mask_slice+self.seq_len])
 
-        mri_image = np.abs(mri)
+        mri_image = to_tensor(mri)
         seg_mask = convert_mask(mask)
 
-        mri_image = rearrange(mri_image, 'x y z e -> (z e) x y')
+        mri_image = rearrange(mri_image, 'x y z e i -> (z e i) x y')
         seg_mask = rearrange(seg_mask, 'h w c s -> (c s) h w')
         
         return mri_image, seg_mask

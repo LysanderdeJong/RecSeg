@@ -40,7 +40,7 @@ def train(args):
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval='step'))
     if args.wandb:
-        wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander")
+        wandb_logger = WandbLogger(project="mri-segmentation", log_model=True, entity="lysander")
     else:
         callbacks.append(LogCallback())
     if not args.progress_bar:
