@@ -31,8 +31,8 @@ def train(args):
         callbacks.append(PrintCallback())
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
-                         auto_select_gpus=True,
-                         gpus=None if args.gpus == "None" else int(args.gpus),
+                         auto_select_gpus=False,
+                         gpus=[3],#None if args.gpus == "None" else int(args.gpus),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
                          auto_scale_batch_size='binsearch' if args.auto_batch else None,

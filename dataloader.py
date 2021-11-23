@@ -6,9 +6,10 @@ from torch.utils.data import Dataset
 import pytorch_lightning as pl
 from torch.utils.data import random_split, DataLoader
 import pickle
+import nibabel as nib
 from einops import rearrange
 
-from utils import read_nii, convert_mask
+from utils import convert_mask
 
 
 class skmtea(Dataset):
@@ -42,7 +43,7 @@ class skmtea(Dataset):
                 mask_path = os.path.join(data_root, segmentation_path, mask_file)
 
                 mri = h5py.File(mri_path, 'r')['target'].shape[2]
-                mask = convert_mask(read_nii(mask_path)).shape[2]
+                mask = nib.load(mask_path).dataobj.shape[2]
 
                 mri_num_slices = mri-self.seq_len+1
                 mask_num_slices = mask-self.seq_len+1
@@ -71,15 +72,14 @@ class skmtea(Dataset):
         mri_path = os.path.join(self.data_root, self.mri_data_path, fmri)
         mask_path = os.path.join(self.data_root, self.segmentation_path, fmask)
         
-        with h5py.File(mri_path, "r") as hf:
-            mri = hf['target'][:, :, mri_slice:mri_slice+self.seq_len, 0, :]
-            mask = convert_mask(read_nii(mask_path))
+        mri = h5py.File(mri_path, 'r', libver='latest')['target'][:, :, mri_slice:mri_slice+self.seq_len, 0, :]
+        mask = np.array(nib.load(mask_path).dataobj[:, :, mask_slice:mask_slice+self.seq_len])
 
-            mri_image = np.abs(mri)
-            seg_mask = mask[:, :, mask_slice:mask_slice+self.seq_len, :]
+        mri_image = np.abs(mri)
+        seg_mask = convert_mask(mask)
 
-            mri_image = rearrange(mri_image, 'x y z e -> (z e) x y')
-            seg_mask = rearrange(seg_mask, 'h w c s -> (c s) h w')
+        mri_image = rearrange(mri_image, 'x y z e -> (z e) x y')
+        seg_mask = rearrange(seg_mask, 'h w c s -> (c s) h w')
         
         return mri_image, seg_mask
 
