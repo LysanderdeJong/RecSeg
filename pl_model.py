@@ -68,12 +68,12 @@ class UnetModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss, output = self.step(batch, batch_idx)
         self.log("val_loss", loss)
-        return loss
+        return output
 
     def test_step(self, batch, batch_idx):
         loss, output = self.step(batch, batch_idx)
         self.log("test_loss", loss)
-        return loss
+        return looutputss
     
     def predict_step(self, batch, batch_idx, dataloader_idx):
         input, _ = batch

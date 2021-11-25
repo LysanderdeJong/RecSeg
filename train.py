@@ -25,6 +25,7 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
         super().__init__()
         self.num_examples = num_examples
         self.class_labels = {
+            0: "Background",
             1: "Patellar Cartilage",
             2: "Femoral Cartilage",
             3: "Tibial Cartilage - Medial",
@@ -39,9 +40,10 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         if batch_idx == 0:
             input, target = batch
-            input = torch.abs(torch.view_as_complex(rearrange(input, "b (c i) h w -> b c h w i", i=2)))
+            input = torch.abs(torch.view_as_complex(rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()))
             target = torch.argmax(target, dim=1)
-            prediction = torch.argmax(torch.softmax(outputs, dim=1), dim=1)
+            prediction = torch.nn.functional.softmax(outputs, dim=1)
+            prediction = torch.argmax(prediction, dim=1)
             
             self.inputs = input
             self.targets = target
@@ -56,13 +58,11 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
             image = self.inputs[i, :, :, :]
             image = image/image.max()*255
             image = rearrange(image, "c h w -> h w c")
-            image = image.cpu().numpy().astype(np.int8)
+            image = image.cpu().numpy().astype(np.uint8)
 
-            target = self.targets[i, :, :, :]
-            target = rearrange(target, "c h w -> h w c").cpu().numpy().astype(np.int8)
+            target = self.targets[i, :, :].cpu().numpy().astype(np.uint8)
 
-            prediction = self.predictions[i, :, :, :]
-            prediction = rearrange(target, "c h w -> h w c").cpu().numpy().astype(np.int8)
+            prediction = self.predictions[i, :, :].cpu().numpy().astype(np.uint8)
 
             image_list.append(image)
             mask_dict = {
@@ -77,7 +77,10 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
             }
             masks.append(mask_dict)
 
-        trainer.logger.log_image("Predictions", image_list, masks)
+        trainer.logger.log_image(key="Predictions", images=image_list, masks=masks)
+        self.inputs = []
+        self.targets = []
+        self.predictions = []
 
 class PrintCallback(pl.Callback):
     def __init__(self):
@@ -102,6 +105,7 @@ def train(args):
     callbacks.append(LearningRateMonitor(logging_interval='step'))
     if args.wandb:
         wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander")
+        callbacks.append(LogSegmentationMasksSKMTEA())
     else:
         callbacks.append(LogCallback())
     if not args.progress_bar:
@@ -145,10 +149,10 @@ def train(args):
     # with torch.autograd.detect_anomaly():
     trainer.tune(model, pl_loader)
     if args.wandb:
-        wandb_logger.watch(model, log="all")
+        trainer.logger.experiment.watch(model, log="all")
     trainer.fit(model, pl_loader)
     if args.wandb:
-        wandb_logger.unwatch(model)
+        trainer.logger.experiment.unwatch()
     print(modelcheckpoint.best_model_path)
 
 

@@ -24,11 +24,14 @@ class skmtea(Dataset):
         if os.path.isfile(cache_file) and use_cache:
             with open(cache_file, "rb") as f:
                 dataset_cache = pickle.load(f)
+            print("Using saved cache.")
         else:
             dataset_cache = []
             
         mri_files = os.listdir(os.path.join(data_root, mri_data_path))
+        mri_files.sort()
         segmentation_masks = os.listdir(os.path.join(data_root, segmentation_path))
+        segmentation_masks.sort()
         
         assert len(mri_files) == len(segmentation_masks)
         
@@ -38,6 +41,8 @@ class skmtea(Dataset):
         else:
             self.mri_slices = []
             self.mask_slices = []
+
+            print("Generating cache file.")
 
             for mri_file, mask_file in zip(mri_files, segmentation_masks):
                 mri_path = os.path.join(data_root, mri_data_path, mri_file)
@@ -61,6 +66,7 @@ class skmtea(Dataset):
                 os.makedirs('./.cache', exist_ok=True)
                 with open(cache_file, "wb") as f:
                     pickle.dump(dataset_cache, f)
+                print(f"Savinf cache to {cache_file}.")
                 del dataset_cache
 
     def __len__(self):
