@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 from einops import rearrange
 
 from model.unet import Unet
-from losses import DiceCELoss
+from losses import DiceLoss
 
 
 class UnetModule(pl.LightningModule):
@@ -44,7 +44,8 @@ class UnetModule(pl.LightningModule):
             drop_prob=self.drop_prob,
         )
         
-        self.criterion = DiceCELoss()
+        self.dice_loss = DiceLoss()
+        self.cross_entropy = nn.CrossEntropyLoss()
 
     def forward(self, x):
         x = F.group_norm(x, num_groups=1)
@@ -57,23 +58,31 @@ class UnetModule(pl.LightningModule):
         if torch.any(torch.isnan(output)):
             print(output)
             raise ValueError
-        loss = self.criterion(output, target)
-        return loss, output
+        loss_dict = {}
+        loss_dict["cross_entropy"] = self.cross_entropy(output, torch.argmax(target, dim=1).long())
+        dice_loss, dice_score = self.dice_loss(output, target)
+        loss_dict["dice_loss"] = dice_loss.mean()
+        loss_dict["dice_score"] = dice_score.detach()
+        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
+        return loss_dict, output
 
     def training_step(self, batch, batch_idx):
-        loss, output = self.step(batch, batch_idx)
-        self.log("train_loss", loss.detach())
-        return loss
+        loss_dict, output = self.step(batch, batch_idx)
+        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+            self.log(f"train_{metric}", value.mean().detach())
+        return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
-        loss, output = self.step(batch, batch_idx)
-        self.log("val_loss", loss)
-        return output
+        loss_dict, output = self.step(batch, batch_idx)
+        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+            self.log(f"val_{metric}", value.mean().detach())
+        return output, loss_dict
 
     def test_step(self, batch, batch_idx):
-        loss, output = self.step(batch, batch_idx)
-        self.log("test_loss", loss)
-        return looutputss
+        loss_dict, output = self.step(batch, batch_idx)
+        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+            self.log(f"test_{metric}", value.mean().detach())
+        return loss_dict
     
     def predict_step(self, batch, batch_idx, dataloader_idx):
         input, _ = batch
@@ -115,15 +124,6 @@ class UnetModule(pl.LightningModule):
         # training params (opt)
         parser.add_argument(
             "--lr", default=1e-3, type=float, help="Optimizer learning rate"
-        )
-        parser.add_argument(
-            "--lr_step_size",
-            default=40,
-            type=int,
-            help="Epoch at which to decrease step size",
-        )
-        parser.add_argument(
-            "--lr_gamma", default=0.1, type=float, help="Amount to decrease step size"
         )
         parser.add_argument(
             "--weight_decay",

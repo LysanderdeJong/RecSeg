@@ -36,24 +36,27 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
         self.inputs = []
         self.targets = []
         self.predictions = []
+        self.metrics = []
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         if batch_idx == 0:
             input, target = batch
             input = torch.abs(torch.view_as_complex(rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()))
             target = torch.argmax(target, dim=1)
-            prediction = torch.nn.functional.softmax(outputs, dim=1)
+            prediction = torch.nn.functional.softmax(outputs[0], dim=1)
             prediction = torch.argmax(prediction, dim=1)
             
             self.inputs = input
             self.targets = target
             self.predictions = prediction
+            self.metrics = outputs[1]
 
 
     def on_validation_end(self, trainer, pl_module):
         num_examples = min(self.num_examples, self.inputs.shape[0])
         image_list = []
         masks = []
+        captions = []
         for i in range(num_examples):
             image = self.inputs[i, :, :, :]
             image = image/image.max()*255
@@ -76,8 +79,11 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
                 }
             }
             masks.append(mask_dict)
+            caption_str = f"DSC: {self.metrics['dice_score'][i].item():.3f}"
+            print(caption_str)
+            captions.append(caption_str)
 
-        trainer.logger.log_image(key="Predictions", images=image_list, masks=masks)
+        trainer.logger.log_image(key="Predictions", images=image_list, masks=masks, caption=captions)
         self.inputs = []
         self.targets = []
         self.predictions = []
@@ -104,7 +110,7 @@ def train(args):
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval='step'))
     if args.wandb:
-        wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander")
+        wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander", mode="offline")
         callbacks.append(LogSegmentationMasksSKMTEA())
     else:
         callbacks.append(LogCallback())
@@ -112,8 +118,8 @@ def train(args):
         callbacks.append(PrintCallback())
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
-                         auto_select_gpus=False,
-                         gpus=[3],#None if args.gpus == "None" else int(args.gpus),
+                         auto_select_gpus=True,
+                         gpus=None if args.gpus == "None" else int(args.gpus),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
                          auto_scale_batch_size='binsearch' if args.auto_batch else None,
