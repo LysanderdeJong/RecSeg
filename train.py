@@ -113,7 +113,7 @@ def train(args):
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
                          auto_select_gpus=False,
-                         gpus=[0],#None if args.gpus == "None" else int(args.gpus),
+                         gpus=[3],#None if args.gpus == "None" else int(args.gpus),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
                          auto_scale_batch_size='binsearch' if args.auto_batch else None,

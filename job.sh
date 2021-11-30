@@ -1,0 +1,1 @@
+python train.py --progress_bar --precision 16 --batch_size 24 --num_workers 12 --data_root "/data/projects/recon/data/public/qdess/v1-release/" --mri_data_path "files_recon_calib-24/" --segmentation_path "segmentation_masks/raw-data-track/" --epochs 200 --wandb

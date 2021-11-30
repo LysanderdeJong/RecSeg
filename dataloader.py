@@ -54,8 +54,8 @@ class skmtea(Dataset):
                 mri_num_slices = mri-self.seq_len+1
                 mask_num_slices = mask-self.seq_len+1
 
-                self.mri_slices += [(mri_file, i) for i in range(mri_num_slices)]
-                self.mask_slices += [(mask_file, i) for i in range(mask_num_slices)]
+                self.mri_slices += [(mri_path, i) for i in range(mri_num_slices)]
+                self.mask_slices += [(mask_path, i) for i in range(mask_num_slices)]
             
             assert len(self.mri_slices) == len(self.mask_slices)
             
@@ -76,11 +76,8 @@ class skmtea(Dataset):
         fmri, mri_slice = self.mri_slices[idx]
         fmask, mask_slice = self.mask_slices[idx]
         
-        mri_path = os.path.join(self.data_root, self.mri_data_path, fmri)
-        mask_path = os.path.join(self.data_root, self.segmentation_path, fmask)
-        
-        mri = h5py.File(mri_path, 'r', libver='latest')['target'][:, :, mri_slice:mri_slice+self.seq_len, 0, :]
-        mask = np.array(nib.load(mask_path).dataobj[:, :, mask_slice:mask_slice+self.seq_len])
+        mri = h5py.File(fmri, 'r', libver='latest')['target'][:, :, mri_slice:mri_slice+self.seq_len, 0, :]
+        mask = np.array(nib.load(fmask).dataobj[:, :, mask_slice:mask_slice+self.seq_len])
 
         mri_image = to_tensor(mri)
         seg_mask = convert_mask(mask)
