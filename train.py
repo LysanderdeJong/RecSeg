@@ -80,7 +80,6 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
             }
             masks.append(mask_dict)
             caption_str = f"DSC: {self.metrics['dice_score'][i].item():.3f}"
-            print(caption_str)
             captions.append(caption_str)
 
         trainer.logger.log_image(key="Predictions", images=image_list, masks=masks, caption=captions)
@@ -97,7 +96,7 @@ class PrintCallback(pl.Callback):
 
 def train(args):
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    pl.seed_everything(args.seed)
+    pl.seed_everything(args.seed, workers=True)
     os.makedirs(args.log_dir, exist_ok=True)
 
     # Create a PyTorch Lightning trainer
@@ -110,7 +109,7 @@ def train(args):
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval='step'))
     if args.wandb:
-        wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander", mode="offline")
+        wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander")
         callbacks.append(LogSegmentationMasksSKMTEA())
     else:
         callbacks.append(LogCallback())
@@ -118,8 +117,8 @@ def train(args):
         callbacks.append(PrintCallback())
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
-                         auto_select_gpus=True,
-                         gpus=None if args.gpus == "None" else int(args.gpus),
+                         auto_select_gpus=False,
+                         gpus=[2],#None if args.gpus == "None" else int(args.gpus),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
                          auto_scale_batch_size='binsearch' if args.auto_batch else None,
