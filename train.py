@@ -3,7 +3,7 @@ import argparse
 import torch
 import numpy as np
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, ModelSummary, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, ModelSummary, LearningRateMonitor, StochasticWeightAveraging
 from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 from einops import rearrange
@@ -104,7 +104,8 @@ def train(args):
     modelcheckpoint = ModelCheckpoint(monitor='val_loss', mode='min', save_top_k=1,
                                       save_last=True, filename='{epoch}-{val_loss:.4f}')
     callbacks.append(modelcheckpoint)
-    callbacks.append(EarlyStopping(monitor='val_loss', mode='min', patience=5))
+    callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
+    callbacks.append(EarlyStopping(monitor='val_loss', mode='min', patience=6))
     callbacks.append(ModelSummary(max_depth=1))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval='step'))
@@ -172,7 +173,7 @@ if __name__ == '__main__':
     parser = UnetModule.add_model_specific_args(parser)
     
     # trainer hyperparameters
-    parser.add_argument('--epochs', default=30, type=int,
+    parser.add_argument('--epochs', default=40, type=int,
                         help='Number of epochs to train.')
     
     parser.add_argument('--precision', default=32, type=int,

@@ -94,8 +94,10 @@ class UnetModule(pl.LightningModule):
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
+        schedular = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optim, mode='min', factor=0.1, patience=5, cooldown=0)
 
-        return [optim]
+        return [optim], [schedular]
 
     @staticmethod
     def add_model_specific_args(parent_parser):
