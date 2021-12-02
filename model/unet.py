@@ -3,6 +3,46 @@ from torch import nn
 from torch.nn import functional as F
 
 
+class ConvBlock(nn.Module):
+    """
+    A Convolutional Block that consists of two convolution layers each followed by
+    instance normalization, LeakyReLU activation and dropout.
+    """
+
+    def __init__(self, in_chans: int, out_chans: int, drop_prob: float, **kwargs):
+        """
+        Args:
+            in_chans: Number of channels in the input.
+            out_chans: Number of channels in the output.
+            drop_prob: Dropout probability.
+        """
+        super().__init__()
+
+        self.in_chans = in_chans
+        self.out_chans = out_chans
+        self.drop_prob = drop_prob
+
+        self.layers = nn.Sequential(
+            nn.Conv2d(in_chans, out_chans, kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm2d(out_chans),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Dropout2d(drop_prob),
+            nn.Conv2d(out_chans, out_chans, kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm2d(out_chans),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Dropout2d(drop_prob),
+        )
+
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            image: Input 4D tensor of shape `(N, in_chans, H, W)`.
+        Returns:
+            Output tensor of shape `(N, out_chans, H, W)`.
+        """
+        return self.layers(image)
+
+
 class Unet(nn.Module):
     """
     PyTorch implementation of a U-Net model.
@@ -19,6 +59,8 @@ class Unet(nn.Module):
         chans: int = 32,
         num_pool_layers: int = 4,
         drop_prob: float = 0.0,
+        block = ConvBlock,
+        **kwargs
     ):
         """
         Args:
@@ -39,9 +81,9 @@ class Unet(nn.Module):
         self.down_sample_layers = nn.ModuleList([ConvBlock(in_chans, chans, drop_prob)])
         ch = chans
         for _ in range(num_pool_layers - 1):
-            self.down_sample_layers.append(ConvBlock(ch, ch * 2, drop_prob))
+            self.down_sample_layers.append(block(ch, ch * 2, drop_prob, **kwargs))
             ch *= 2
-        self.conv = ConvBlock(ch, ch * 2, drop_prob)
+        self.conv = block(ch, ch * 2, drop_prob, **kwargs)
 
         self.up_conv = nn.ModuleList()
         self.up_transpose_conv = nn.ModuleList()
@@ -53,7 +95,7 @@ class Unet(nn.Module):
         self.up_transpose_conv.append(TransposeConvBlock(ch * 2, ch))
         self.up_conv.append(
             nn.Sequential(
-                ConvBlock(ch * 2, ch, drop_prob),
+                ConvBlock(ch * 2, ch, drop_prob, **kwargs),
                 nn.Conv2d(ch, self.out_chans, kernel_size=1, stride=1),
             )
         )
@@ -94,46 +136,6 @@ class Unet(nn.Module):
             output = conv(output)
 
         return output
-
-
-class ConvBlock(nn.Module):
-    """
-    A Convolutional Block that consists of two convolution layers each followed by
-    instance normalization, LeakyReLU activation and dropout.
-    """
-
-    def __init__(self, in_chans: int, out_chans: int, drop_prob: float):
-        """
-        Args:
-            in_chans: Number of channels in the input.
-            out_chans: Number of channels in the output.
-            drop_prob: Dropout probability.
-        """
-        super().__init__()
-
-        self.in_chans = in_chans
-        self.out_chans = out_chans
-        self.drop_prob = drop_prob
-
-        self.layers = nn.Sequential(
-            nn.Conv2d(in_chans, out_chans, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm2d(out_chans),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Dropout2d(drop_prob),
-            nn.Conv2d(out_chans, out_chans, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm2d(out_chans),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Dropout2d(drop_prob),
-        )
-
-    def forward(self, image: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            image: Input 4D tensor of shape `(N, in_chans, H, W)`.
-        Returns:
-            Output tensor of shape `(N, out_chans, H, W)`.
-        """
-        return self.layers(image)
 
 
 class TransposeConvBlock(nn.Module):

@@ -82,8 +82,8 @@ class skmtea(Dataset):
         mri_image = to_tensor(mri)
         seg_mask = convert_mask(mask)
 
-        mri_image = rearrange(mri_image, 'x y z e i -> (z e i) x y')
-        seg_mask = rearrange(seg_mask, 'h w c s -> (c s) h w')
+        mri_image = rearrange(mri_image, 'x y z () i -> z i x y')
+        seg_mask = rearrange(seg_mask, 'h w c s -> c s h w')
         
         return mri_image, seg_mask
 

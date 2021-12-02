@@ -9,7 +9,7 @@ from pytorch_lightning.loggers import WandbLogger
 from einops import rearrange
 
 from dataloader import DataModule
-from pl_model import UnetModule
+from pl_model import UnetModule, LamdaUnetModule
 
 
 class LogCallback(pl.Callback):
@@ -106,7 +106,7 @@ def train(args):
     callbacks.append(modelcheckpoint)
     callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
     callbacks.append(EarlyStopping(monitor='val_loss', mode='min', patience=6))
-    callbacks.append(ModelSummary(max_depth=1))
+    callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval='step'))
     if args.wandb:
@@ -118,8 +118,8 @@ def train(args):
         callbacks.append(PrintCallback())
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
-                         auto_select_gpus=False,
-                         gpus=[2],#None if args.gpus == "None" else int(args.gpus),
+                         auto_select_gpus=True,
+                         gpus=None if args.gpus == "None" else int(args.gpus),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
                          auto_scale_batch_size='binsearch' if args.auto_batch else None,
@@ -144,7 +144,8 @@ def train(args):
     # Create dataloaders
     pl_loader = DataModule(**dict_args)
     # Create model
-    model = UnetModule(**dict_args)
+    # model = UnetModule(**dict_args)
+    model = LamdaUnetModule(**dict_args)
         
     if not args.progress_bar:
         print("\nThe progress bar has been surpressed. For updates on the training progress, " + \
@@ -170,7 +171,7 @@ if __name__ == '__main__':
     parser = DataModule.add_data_specific_args(parser)
 
     # Model hyperparameters
-    parser = UnetModule.add_model_specific_args(parser)
+    parser = LamdaUnetModule.add_model_specific_args(parser)
     
     # trainer hyperparameters
     parser.add_argument('--epochs', default=40, type=int,
