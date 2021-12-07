@@ -7,7 +7,7 @@ from einops import rearrange
 
 from model.unet import Unet
 from model.lambda_layer import LambdaBlock
-from losses import DiceLoss
+from losses import DiceLoss, ContourLoss
 
 
 class UnetModule(pl.LightningModule):
@@ -45,6 +45,7 @@ class UnetModule(pl.LightningModule):
         
         self.dice_loss = DiceLoss()
         self.cross_entropy = nn.CrossEntropyLoss()
+        self.contour_loss = ContourLoss()
 
     def forward(self, x):
         x = F.group_norm(x, num_groups=1)
@@ -53,16 +54,24 @@ class UnetModule(pl.LightningModule):
     
     def step(self, batch, batch_indx=None):
         input, target = batch
+        
+        if len(input.shape) == 5:
+            input = rearrange(input, 'b t c h w -> (b t) c h w')
+            target = rearrange(target, 'b t c h w -> (b t) c h w')
+            
         output = self(input)
+
         if torch.any(torch.isnan(output)):
             print(output)
             raise ValueError
+            
         loss_dict = {}
         loss_dict["cross_entropy"] = self.cross_entropy(output, torch.argmax(target, dim=1).long())
         dice_loss, dice_score = self.dice_loss(output, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
+        loss_dict["contour_loss"] = self.contour_loss(output, target.float())
+        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"] + 0.01 * loss_dict["contour_loss"]
         return loss_dict, output
 
     def training_step(self, batch, batch_idx):

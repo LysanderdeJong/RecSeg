@@ -3,11 +3,15 @@ import torch
 from einops import rearrange
 
 
-def convert_mask(mask, n_classes=7):
+def convert_mask(mask, n_classes=7, compact=False):
     x, y, z = mask.shape
     out = np.zeros((x, y, z, n_classes), dtype=np.bool)
     for i in range(n_classes):
         out[:, :, :, i] = (mask == i)
+    if compact:
+        out[:, :, :, 3] = np.logical_or(out[:, :, :, 3], out[:, :, :, 4])
+        out[:, :, :, 4] = np.logical_or(out[:, :, :, 5], out[:, :, :, 6])
+        out = out[:, :, :, :5]
     return out.astype(np.int8)
 
 def segmentation_volume_to_img(seg):

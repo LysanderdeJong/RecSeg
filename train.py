@@ -12,91 +12,7 @@ from einops import rearrange
 from dataloader import DataModule
 from pl_model import UnetModule, LamdaUnetModule
 
-
-class LogCallback(pl.Callback):
-    def __init__(self):
-        super().__init__()
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        for name, params in pl_module.named_parameters():
-            trainer.logger.experiment.add_histogram(name, params, trainer.current_epoch)
-
-class LogSegmentationMasksSKMTEA(pl.Callback):
-    def __init__(self, num_examples=5):
-        super().__init__()
-        self.num_examples = num_examples
-        self.class_labels = {
-            0: "Background",
-            1: "Patellar Cartilage",
-            2: "Femoral Cartilage",
-            3: "Tibial Cartilage - Medial",
-            4: "Tibial Cartilage - Lateral",
-            5: "Meniscus - Medial",
-            6: "Meniscus - Lateral"
-        }
-        self.inputs = []
-        self.targets = []
-        self.predictions = []
-        self.metrics = []
-
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
-        if batch_idx == 0:
-            input, target = batch
-            if len(input.shape) == 5:
-                input = rearrange(input, 'b t c h w -> (b t) c h w')
-                target = rearrange(target, 'b t c h w -> (b t) c h w')
-            input = torch.abs(torch.view_as_complex(rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()))
-            target = torch.argmax(target, dim=1)
-            prediction = torch.nn.functional.softmax(outputs[0], dim=1)
-            prediction = torch.argmax(prediction, dim=1)
-            
-            self.inputs = input
-            self.targets = target
-            self.predictions = prediction
-            self.metrics = outputs[1]
-
-
-    def on_validation_end(self, trainer, pl_module):
-        num_examples = min(self.num_examples, self.inputs.shape[0])
-        image_list = []
-        masks = []
-        captions = []
-        for i in range(num_examples):
-            image = self.inputs[i, :, :, :]
-            image = image/image.max()*255
-            image = rearrange(image, "c h w -> h w c")
-            image = image.cpu().numpy().astype(np.uint8)
-
-            target = self.targets[i, :, :].cpu().numpy().astype(np.uint8)
-
-            prediction = self.predictions[i, :, :].cpu().numpy().astype(np.uint8)
-
-            image_list.append(image)
-            mask_dict = {
-                "predictions":{
-                    "mask_data": prediction,
-                    "class_labels": self.class_labels
-                },
-                "groud_truth":{
-                    "mask_data": target,
-                    "class_labels": self.class_labels
-                }
-            }
-            masks.append(mask_dict)
-            caption_str = f"DSC: {self.metrics['dice_score'][i].item():.3f}"
-            captions.append(caption_str)
-
-        trainer.logger.log_image(key="Predictions", images=image_list, masks=masks, caption=captions)
-        self.inputs = []
-        self.targets = []
-        self.predictions = []
-
-class PrintCallback(pl.Callback):
-    def __init__(self):
-        super().__init__()
-            
-    def on_train_epoch_end(self, trainer, pl_module):
-        print(f"Epoch {trainer.current_epoch} finished.")
+from callbacks import PrintCallback, LogCallback, InferenceTimeCallback, LogSegmentationMasksSKMTEA
 
 def train(args):
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -113,8 +29,9 @@ def train(args):
     callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval='step'))
+    callbacks.append(InferenceTimeCallback())
     if args.wandb:
-        wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander")
+        wandb_logger = WandbLogger(project="mri-segmentation", entity="lysander", offline=True)
         callbacks.append(LogSegmentationMasksSKMTEA())
     else:
         callbacks.append(LogCallback())
@@ -123,8 +40,8 @@ def train(args):
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
                          auto_select_gpus=True,
-                         gpus=[1, 3], #None if args.gpus == "None" else int(args.gpus),
-                         strategy=DDPPlugin(find_unused_parameters=False),
+                         gpus=None if args.gpus == "None" else int(args.gpus),
+                         #strategy=DDPPlugin(find_unused_parameters=False),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
                          auto_scale_batch_size='binsearch' if args.auto_batch else None,
@@ -149,8 +66,7 @@ def train(args):
     # Create dataloaders
     pl_loader = DataModule(**dict_args)
     # Create model
-    # model = UnetModule(**dict_args)
-    model = LamdaUnetModule(**dict_args)
+    model = UnetModule(**dict_args)
         
     # if not args.progress_bar:
     #     print("\nThe progress bar has been surpressed. For updates on the training progress, " + \
@@ -166,6 +82,8 @@ def train(args):
     if args.wandb:
         trainer.logger.experiment.unwatch()
     print(modelcheckpoint.best_model_path)
+    trainer.test(model, pl_loader)
+    
 
 
 if __name__ == '__main__':
@@ -176,7 +94,7 @@ if __name__ == '__main__':
     parser = DataModule.add_data_specific_args(parser)
 
     # Model hyperparameters
-    parser = LamdaUnetModule.add_model_specific_args(parser)
+    parser = UnetModule.add_model_specific_args(parser)
     
     # trainer hyperparameters
     parser.add_argument('--epochs', default=40, type=int,

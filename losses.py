@@ -54,3 +54,23 @@ class DiceLoss(nn.Module):
         loss = 1.0 - dice
 
         return loss.mean(1), dice.mean(1)
+
+    
+class ContourLoss(nn.Module):
+    """https://github.com/rosanajurdi/Perimeter_loss"""
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred, target):
+        pred_contour = self.contour(pred)
+        target_contour = self.contour(target)
+        
+        loss = (pred_contour.flatten(2).sum(-1) - target_contour.flatten(2).sum(-1)).pow(2)
+        loss /= pred.shape[-2]*pred.shape[-1]
+        return loss.mean()
+    
+    def contour(self, x):
+        min_pool = F.max_pool2d(x*-1, kernel_size=(3, 3), stride=1, padding=1)*-1
+        max_pool = F.max_pool2d(min_pool, kernel_size=(3, 3), stride=1, padding=1)
+        x = F.relu(max_pool - min_pool)
+        return x

@@ -1,26 +1,36 @@
 import os
+
 import numpy as np
+
 import torch
-import h5py
 from torch.utils.data import Dataset
-import pytorch_lightning as pl
 from torch.utils.data import random_split, DataLoader
+
+import pytorch_lightning as pl
+
+from fastmri.data.transforms import to_tensor
+from fastmri import rss
+
+from einops import rearrange
+
+import h5py
 import pickle
 import nibabel as nib
-from fastmri.data.transforms import to_tensor
-from einops import rearrange
+import json
 
 from utils import convert_mask
 
 
 class skmtea(Dataset):
-    def __init__(self, data_root, mri_data_path, segmentation_path, seq_len=1, use_cache=True):
+    def __init__(self, split, data_root, mri_data_path, segmentation_path, data_files, seq_len=1, compact_masks=False, use_cache=True):
+        self.split = split
         self.data_root = data_root
         self.mri_data_path = mri_data_path
         self.segmentation_path = segmentation_path
         self.seq_len = seq_len
+        self.compact_masks = compact_masks
         
-        cache_file = './.cache/skm_cache.pkl'
+        cache_file = f'./.cache/skm_cache_{split}.pkl'
         if os.path.isfile(cache_file) and use_cache:
             with open(cache_file, "rb") as f:
                 dataset_cache = pickle.load(f)
@@ -28,12 +38,8 @@ class skmtea(Dataset):
         else:
             dataset_cache = []
             
-        mri_files = os.listdir(os.path.join(data_root, mri_data_path))
-        mri_files.sort()
-        segmentation_masks = os.listdir(os.path.join(data_root, segmentation_path))
-        segmentation_masks.sort()
-        
-        assert len(mri_files) == len(segmentation_masks)
+        file_names = data_files[split]
+        file_names.sort()
         
         if os.path.isfile(cache_file) and use_cache:
             self.mri_slices = dataset_cache[0]
@@ -44,9 +50,9 @@ class skmtea(Dataset):
 
             print("Generating cache file.")
 
-            for mri_file, mask_file in zip(mri_files, segmentation_masks):
-                mri_path = os.path.join(data_root, mri_data_path, mri_file)
-                mask_path = os.path.join(data_root, segmentation_path, mask_file)
+            for file_name in file_names:
+                mri_path = os.path.join(data_root, mri_data_path, file_name+".h5")
+                mask_path = os.path.join(data_root, segmentation_path, file_name+".nii.gz")
 
                 mri = h5py.File(mri_path, 'r')['target'].shape[2]
                 mask = nib.load(mask_path).dataobj.shape[2]
@@ -76,11 +82,11 @@ class skmtea(Dataset):
         fmri, mri_slice = self.mri_slices[idx]
         fmask, mask_slice = self.mask_slices[idx]
         
-        mri = h5py.File(fmri, 'r', libver='latest')['target'][:, :, mri_slice:mri_slice+self.seq_len, 0, :]
+        mri = h5py.File(fmri, 'r', libver='latest')['target'][:, :, mri_slice:mri_slice+self.seq_len, :, :]
         mask = np.array(nib.load(fmask).dataobj[:, :, mask_slice:mask_slice+self.seq_len])
 
-        mri_image = to_tensor(mri)
-        seg_mask = convert_mask(mask)
+        mri_image = rss(to_tensor(mri), dim=-3)
+        seg_mask = convert_mask(mask, compact=self.compact_masks)
 
         mri_image = rearrange(mri_image, 'x y z () i -> z i x y')
         seg_mask = rearrange(seg_mask, 'h w c s -> c s h w')
@@ -89,28 +95,48 @@ class skmtea(Dataset):
 
 
 class DataModule(pl.LightningDataModule):
-    def __init__(self, data_root, mri_data_path, segmentation_path, seq_len=1, use_cache=True, **kwargs):
+    def __init__(self, data_root, mri_data_path, segmentation_path, annotation_path=None, seq_len=1, use_cache=True, **kwargs):
         super().__init__()
         self.save_hyperparameters()
+        self.file_split = {}
 
-    def _make_dataset(self):
-        return skmtea(self.hparams.data_root,
+        if annotation_path is None:
+            file_names = os.listdir(os.path.join(data_root, mri_data_path))
+            file_names = [i[:-3] for i in file_names]
+            self.file_split["all"] = file_names
+        else:
+            data_splits = os.listdir(os.path.join(data_root, annotation_path))
+            data_splits = [i[:-5] for i in data_splits]
+            assert data_splits == ['test', 'train', 'val']
+            for split in data_splits:
+                with open(os.path.join(data_root, annotation_path, split + ".json")) as f:
+                    config = json.load(f)
+                    self.file_split[split] = [i["file_name"][:-3] for i in config["images"]]
+
+    def _make_dataset(self, split, data_files):
+        return skmtea(split,
+                      self.hparams.data_root,
                       self.hparams.mri_data_path,
                       self.hparams.segmentation_path,
+                      data_files,
                       self.hparams.seq_len,
+                      self.hparams.compact_masks,
                       self.hparams.use_cache)
 
     def setup(self, stage=None):
-        # Assign train/val datasets for use in dataloaders
         if stage == "fit" or stage is None:
-            dataset = self._make_dataset()
-            self.train, self.val = random_split(dataset, [int(self.hparams.train_fraction*len(dataset)),
-                                                          len(dataset)-(int(self.hparams.train_fraction*len(dataset)))])
+            if self.hparams.annotation_path:
+                self.train = self._make_dataset("train", self.file_split)
+                self.val = self._make_dataset("val", self.file_split)
+            else:
+                dataset = self._make_dataset("all", self.file_split)
+                self.train, self.val = random_split(dataset, [int(self.hparams.train_fraction*len(dataset)),
+                                                              len(dataset)-(int(self.hparams.train_fraction*len(dataset)))])
+                self.val, self.test = random_split(self.val, [len(self.val)//2, len(self.val)-len(self.val)//2])
 
-        # Assign test dataset for use in dataloader(s)
-        # if stage == "test" or stage is None:
-        #     self.test = None
-        #     self.dims = tuple(self.mnist_test[0][0].shape)
+        if stage == "test" or stage is None:
+            if self.hparams.annotation_path:
+                self.test = self._make_dataset("test", self.file_split)
 
     def train_dataloader(self):
         return DataLoader(self.train, batch_size=self.hparams.batch_size,
@@ -120,9 +146,9 @@ class DataModule(pl.LightningDataModule):
         return DataLoader(self.val, batch_size=self.hparams.batch_size,
                           shuffle=False, num_workers=self.hparams.num_workers)
 
-    # def test_dataloader(self):
-    #     return DataLoader(self.test, batch_size=self.hparams.batch_size,
-    #                       shuffle=False, num_workers=self.hparams.num_workers)
+    def test_dataloader(self):
+        return DataLoader(self.test, batch_size=self.hparams.batch_size,
+                          shuffle=False, num_workers=self.hparams.num_workers)
     
     @staticmethod
     def add_data_specific_args(parent_parser):  # pragma: no-cover
@@ -135,11 +161,15 @@ class DataModule(pl.LightningDataModule):
                             help="Path to the raw mri data from the root.")
         parser.add_argument("--segmentation_path", default='segmentation_masks', type=str,
                             help="Path to the segmentation maps from the root.")
+        parser.add_argument("--annotation_path", default=None, type=str,
+                            help="Path to the annotation maps from the root. Optional")
         parser.add_argument("--seq_len", default=1, type=int,
                             help="Size of the slice looked at.")
         parser.add_argument("--train_fraction", default=0.8, type=float,
                             help="Fraction of th data used for training.") 
         parser.add_argument("--use_cache", default=True, type=bool,
+                            help="Whether to cache dataset metadata in a pkl file")
+        parser.add_argument("--compact_masks", default=False, type=bool,
                             help="Whether to cache dataset metadata in a pkl file")
 
         # data loader arguments
