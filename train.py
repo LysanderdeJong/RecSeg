@@ -6,6 +6,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, ModelSummary, LearningRateMonitor, StochasticWeightAveraging
 from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.plugins import DDPPlugin
 from einops import rearrange
 
 from dataloader import DataModule
@@ -41,6 +42,9 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         if batch_idx == 0:
             input, target = batch
+            if len(input.shape) == 5:
+                input = rearrange(input, 'b t c h w -> (b t) c h w')
+                target = rearrange(target, 'b t c h w -> (b t) c h w')
             input = torch.abs(torch.view_as_complex(rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()))
             target = torch.argmax(target, dim=1)
             prediction = torch.nn.functional.softmax(outputs[0], dim=1)
@@ -104,7 +108,7 @@ def train(args):
     modelcheckpoint = ModelCheckpoint(monitor='val_loss', mode='min', save_top_k=1,
                                       save_last=True, filename='{epoch}-{val_loss:.4f}')
     callbacks.append(modelcheckpoint)
-    callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
+    #callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
     callbacks.append(EarlyStopping(monitor='val_loss', mode='min', patience=6))
     callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
@@ -119,7 +123,8 @@ def train(args):
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
                          auto_select_gpus=True,
-                         gpus=None if args.gpus == "None" else int(args.gpus),
+                         gpus=[1, 3], #None if args.gpus == "None" else int(args.gpus),
+                         strategy=DDPPlugin(find_unused_parameters=False),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
                          auto_scale_batch_size='binsearch' if args.auto_batch else None,
@@ -147,10 +152,10 @@ def train(args):
     # model = UnetModule(**dict_args)
     model = LamdaUnetModule(**dict_args)
         
-    if not args.progress_bar:
-        print("\nThe progress bar has been surpressed. For updates on the training progress, " + \
-              "check the TensorBoard file at " + trainer.logger.log_dir + ". If you " + \
-              "want to see the progress bar, use the argparse option \"progress_bar\".\n")
+    # if not args.progress_bar:
+    #     print("\nThe progress bar has been surpressed. For updates on the training progress, " + \
+    #           "check the Logger file at " + trainer.logger.log_dir + ". If you " + \
+    #           "want to see the progress bar, use the argparse option \"progress_bar\".\n")
 
     # Training
     # with torch.autograd.detect_anomaly():

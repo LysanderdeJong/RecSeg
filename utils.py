@@ -24,3 +24,9 @@ def segmentation_volume_to_img(seg):
     elif isinstance(seg, torch.Tensor):
         img = torch.argmax(seg, dim=c_dim)
     return img
+
+def get_model(**kwargs):
+    pass
+
+def get_datase(**kwargs):
+    pass

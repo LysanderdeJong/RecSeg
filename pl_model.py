@@ -74,13 +74,13 @@ class UnetModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
         for metric, value in zip(loss_dict.keys(), loss_dict.values()):
-            self.log(f"val_{metric}", value.mean().detach())
+            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
         for metric, value in zip(loss_dict.keys(), loss_dict.values()):
-            self.log(f"test_{metric}", value.mean().detach())
+            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
     
     def predict_step(self, batch, batch_idx, dataloader_idx):
@@ -196,13 +196,13 @@ class LamdaUnetModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
         for metric, value in zip(loss_dict.keys(), loss_dict.values()):
-            self.log(f"val_{metric}", value.mean().detach())
+            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
         for metric, value in zip(loss_dict.keys(), loss_dict.values()):
-            self.log(f"test_{metric}", value.mean().detach())
+            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
     
     def predict_step(self, batch, batch_idx, dataloader_idx):
