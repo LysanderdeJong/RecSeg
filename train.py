@@ -77,7 +77,7 @@ def train(args):
     # with torch.autograd.detect_anomaly():
     trainer.tune(model, pl_loader)
     if args.wandb:
-        trainer.logger.experiment.watch(model, log="all")
+        trainer.logger.experiment.watch(model, log="all", log_graph=True)
     trainer.fit(model, pl_loader)
     if args.wandb:
         trainer.logger.experiment.unwatch()
