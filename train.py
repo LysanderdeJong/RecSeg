@@ -7,7 +7,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, ModelSum
 from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.plugins import DDPPlugin
-from einops import rearrange
 
 from dataloader import DataModule
 from pl_model import UnetModule, LamdaUnetModule
@@ -24,14 +23,14 @@ def train(args):
     modelcheckpoint = ModelCheckpoint(monitor='val_loss', mode='min', save_top_k=1,
                                       save_last=True, filename='{epoch}-{val_loss:.4f}')
     callbacks.append(modelcheckpoint)
-    #callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
-    callbacks.append(EarlyStopping(monitor='val_loss', mode='min', patience=6))
+    callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
+    callbacks.append(EarlyStopping(monitor='val_loss', mode='min', patience=7))
     callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval='step'))
     callbacks.append(InferenceTimeCallback())
     if args.wandb:
-        wandb_logger = WandbLogger(project="mri-segmentation", entity="lysander", offline=True)
+        wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander")
         callbacks.append(LogSegmentationMasksSKMTEA())
     else:
         callbacks.append(LogCallback())
@@ -40,7 +39,7 @@ def train(args):
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
                          auto_select_gpus=True,
-                         gpus=None if args.gpus == "None" else int(args.gpus),
+                         gpus=[2], #None if args.gpus == "None" else int(args.gpus),
                          #strategy=DDPPlugin(find_unused_parameters=False),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
@@ -56,7 +55,7 @@ def train(args):
                          benchmark=True if args.benchmark else False,
                          plugins=args.plugins,
                          profiler=args.profiler if args.profiler else None,
-                         enable_model_summary = False,
+                         enable_model_summary=False,
                          logger=wandb_logger if args.wandb else True,
                          fast_dev_run=True if args.fast_dev_run else False)
     trainer.logger._default_hp_metric = None
@@ -77,7 +76,7 @@ def train(args):
     # with torch.autograd.detect_anomaly():
     trainer.tune(model, pl_loader)
     if args.wandb:
-        trainer.logger.experiment.watch(model, log="all")
+        trainer.logger.experiment.watch(model, log="all", log_graph=True)
     trainer.fit(model, pl_loader)
     if args.wandb:
         trainer.logger.experiment.unwatch()

@@ -107,7 +107,6 @@ class DataModule(pl.LightningDataModule):
         else:
             data_splits = os.listdir(os.path.join(data_root, annotation_path))
             data_splits = [i[:-5] for i in data_splits]
-            assert data_splits == ['test', 'train', 'val']
             for split in data_splits:
                 with open(os.path.join(data_root, annotation_path, split + ".json")) as f:
                     config = json.load(f)

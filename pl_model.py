@@ -45,7 +45,6 @@ class UnetModule(pl.LightningModule):
         
         self.dice_loss = DiceLoss()
         self.cross_entropy = nn.CrossEntropyLoss()
-        self.contour_loss = ContourLoss()
 
     def forward(self, x):
         x = F.group_norm(x, num_groups=1)
@@ -70,8 +69,7 @@ class UnetModule(pl.LightningModule):
         dice_loss, dice_score = self.dice_loss(output, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["contour_loss"] = self.contour_loss(output, target.float())
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"] + 0.01 * loss_dict["contour_loss"]
+        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
         return loss_dict, output
 
     def training_step(self, batch, batch_idx):

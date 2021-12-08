@@ -131,7 +131,7 @@ class InferenceTimeCallback(pl.Callback):
         if isinstance(trainer.logger.experiment, torch.utils.tensorboard.writer.SummaryWriter):
             trainer.logger.log_hyperparams(pl_module.hparams, {"hp/inference_time": timings.mean()})
         elif isinstance(trainer.logger.experiment, wandb.sdk.wandb_run.Run):
-            trainer.logger.experiment.summary["inference_time"] = timings
+            trainer.logger.experiment.summary["inference_time"] = timings.mean()
             
         del dummy_input
         del timings
