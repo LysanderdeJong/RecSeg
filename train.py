@@ -1,5 +1,5 @@
 import os
-import argparse
+import jsonargparse
 import torch
 import numpy as np
 import pytorch_lightning as pl
@@ -8,10 +8,8 @@ from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.plugins import DDPPlugin
 
-from dataloader import DataModule
-from pl_model import UnetModule, LamdaUnetModule
-
 from callbacks import PrintCallback, LogCallback, InferenceTimeCallback, LogSegmentationMasksSKMTEA
+from utils import parse_known_args, get_dataset, get_model
 
 def train(args):
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -39,7 +37,7 @@ def train(args):
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
                          auto_select_gpus=True,
-                         gpus=[2], #None if args.gpus == "None" else int(args.gpus),
+                         gpus=None if args.gpus == "None" else int(args.gpus),
                          #strategy=DDPPlugin(find_unused_parameters=False),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
@@ -63,9 +61,9 @@ def train(args):
     
     dict_args = vars(args)
     # Create dataloaders
-    pl_loader = DataModule(**dict_args)
+    pl_loader = get_dataset(**dict_args)
     # Create model
-    model = UnetModule(**dict_args)
+    model = get_model(**dict_args)
         
     # if not args.progress_bar:
     #     print("\nThe progress bar has been surpressed. For updates on the training progress, " + \
@@ -87,13 +85,19 @@ def train(args):
 
 if __name__ == '__main__':
     print("Check the Tensorboard to monitor training progress.")
-    parser = argparse.ArgumentParser()
+    jsonargparse.ArgumentParser.parse_known_args = parse_known_args
+    parser = jsonargparse.ArgumentParser()
     
-    # dataset hyperparameters
-    parser = DataModule.add_data_specific_args(parser)
+    # figure out which model to use
+    parser.add_argument("--model", default="unet", type=str)
+    parser.add_argument("--dataset", default="skmtea", type=str)
 
-    # Model hyperparameters
-    parser = UnetModule.add_model_specific_args(parser)
+    temp_args, _ = parser.parse_known_args()
+    
+    parser.add_argument('--config', action=jsonargparse.ActionConfigFile)
+    
+    parser = get_model(parser=parser, args=temp_args)
+    parser = get_dataset(parser=parser, args=temp_args)
     
     # trainer hyperparameters
     parser.add_argument('--epochs', default=40, type=int,
@@ -148,6 +152,11 @@ if __name__ == '__main__':
     parser.add_argument('--profiler', default=None, type=str,
                         choices=['simple', 'advanced', 'pytorch'],
                         help='Code profiler.')
+    
+    parser.add_argument('--lev1', default='test')
+    parser.add_argument('--lev1.opt1', default='from default 1')  
+    parser.add_argument('--lev1.opt2', default='from default 2') 
+    
     
     args = parser.parse_args()
     train(args)

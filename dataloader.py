@@ -18,8 +18,6 @@ import pickle
 import nibabel as nib
 import json
 
-from utils import convert_mask
-
 
 class skmtea(Dataset):
     def __init__(self, split, data_root, mri_data_path, segmentation_path, data_files, seq_len=1, compact_masks=False, use_cache=True):
@@ -86,12 +84,23 @@ class skmtea(Dataset):
         mask = np.array(nib.load(fmask).dataobj[:, :, mask_slice:mask_slice+self.seq_len])
 
         mri_image = rss(to_tensor(mri), dim=-3)
-        seg_mask = convert_mask(mask, compact=self.compact_masks)
+        seg_mask = self.convert_mask(mask, compact=self.compact_masks)
 
         mri_image = rearrange(mri_image, 'x y z () i -> z i x y')
         seg_mask = rearrange(seg_mask, 'h w c s -> c s h w')
         
         return mri_image, seg_mask
+    
+    def convert_mask(self, mask, n_classes=7, compact=False):
+        x, y, z = mask.shape
+        out = np.zeros((x, y, z, n_classes), dtype=np.bool)
+        for i in range(n_classes):
+            out[:, :, :, i] = (mask == i)
+        if compact:
+            out[:, :, :, 3] = np.logical_or(out[:, :, :, 3], out[:, :, :, 4])
+            out[:, :, :, 4] = np.logical_or(out[:, :, :, 5], out[:, :, :, 6])
+            out = out[:, :, :, :5]
+        return out.astype(np.int8)
 
 
 class DataModule(pl.LightningDataModule):
