@@ -43,7 +43,7 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
     
     @rank_zero_only
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
-        if batch_idx == 0:
+        if batch_idx == 1:
             input, target = batch
             if len(input.shape) == 5:
                 input = rearrange(input, 'b t c h w -> (b t) c h w')
@@ -102,6 +102,24 @@ class PrintCallback(pl.Callback):
     @rank_zero_only
     def on_train_epoch_end(self, trainer, pl_module):
         print(f"Epoch {trainer.current_epoch} finished.")
+        
+class NumParamCallback(pl.Callback):
+    def __init__(self):
+        super().__init__()
+            
+    @rank_zero_only
+    def on_pretrain_routine_start(self, trainer, pl_module):
+        trainable_params = sum(p.numel() for p in pl_module.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in pl_module.parameters())
+        non_trainable_params = total_params - trainable_params
+        if isinstance(trainer.logger.experiment, torch.utils.tensorboard.writer.SummaryWriter):
+            trainer.logger.log_hyperparams(pl_module.hparams, {"hp/total_parameters": trainable_params})
+            trainer.logger.log_hyperparams(pl_module.hparams, {"hp/trainable_parameters": trainable_params})
+            trainer.logger.log_hyperparams(pl_module.hparams, {"hp/non-trainable_parameters": non_trainable_params})
+        elif isinstance(trainer.logger.experiment, wandb.sdk.wandb_run.Run):
+            trainer.logger.experiment.summary["total_parameters"] = total_params
+            trainer.logger.experiment.summary["trainable_parameters"] = trainable_params
+            trainer.logger.experiment.summary["non-trainable_parameters"] = non_trainable_params
         
 class InferenceTimeCallback(pl.Callback):
     def __init__(self):

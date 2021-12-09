@@ -36,7 +36,7 @@ class UnetModule(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
 
-        self.unet = Unet(
+        self.model = Unet(
             in_chans=self.hparams.in_chans,
             out_chans=self.hparams.out_chans,
             chans=self.hparams.chans,
@@ -49,7 +49,7 @@ class UnetModule(pl.LightningModule):
 
     def forward(self, x):
         x = F.group_norm(x, num_groups=1)
-        x = self.unet(x)
+        x = self.model(x)
         return x
     
     def step(self, batch, batch_indx=None):
@@ -155,7 +155,7 @@ class LamdaUnetModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         
-        self.unet = Unet(
+        self.model = Unet(
             in_chans=self.hparams.in_chans,
             out_chans=self.hparams.out_chans,
             chans=self.hparams.chans,
@@ -171,7 +171,7 @@ class LamdaUnetModule(pl.LightningModule):
 
     def forward(self, x):
         x = F.group_norm(x, num_groups=1)
-        x = self.unet(x)
+        x = self.model(x)
         return x
     
     def step(self, batch, batch_indx=None):
@@ -292,7 +292,7 @@ class VnetModule(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
 
-        self.unet = Vnet(
+        self.model = Vnet(
             in_channels=self.hparams.in_chans,
             out_channels=self.hparams.out_chans,
             dropout_prob=self.hparams.drop_prob,
@@ -303,7 +303,7 @@ class VnetModule(pl.LightningModule):
 
     def forward(self, x):
         x = F.group_norm(x, num_groups=1)
-        x = self.unet(x)
+        x = self.model(x)
         return x
     
     def step(self, batch, batch_indx=None):

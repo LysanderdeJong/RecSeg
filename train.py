@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.plugins import DDPPlugin
 
-from callbacks import PrintCallback, LogCallback, InferenceTimeCallback, LogSegmentationMasksSKMTEA
+from callbacks import PrintCallback, LogCallback, NumParamCallback, InferenceTimeCallback, LogSegmentationMasksSKMTEA
 from utils import parse_known_args, get_dataset, get_model
 
 def train(args):
@@ -26,6 +26,7 @@ def train(args):
     callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval='step'))
+    callbacks.append(NumParamCallback())
     callbacks.append(InferenceTimeCallback())
     if args.wandb:
         wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander")
