@@ -115,7 +115,7 @@ class InferenceTimeCallback(pl.Callback):
         repetitions = 300
         timings=torch.zeros(repetitions)
 
-        for _ in range(10):
+        for _ in range(25):
             _ = pl_module(dummy_input)
         
         for rep in range(repetitions):

@@ -3,7 +3,7 @@ import torch
 from einops import rearrange
 
 from dataloader import DataModule
-from pl_model import UnetModule, LamdaUnetModule
+from pl_model import UnetModule, LamdaUnetModule, VnetModule
 
 
 def segmentation_volume_to_img(seg):
@@ -27,6 +27,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             parser = UnetModule.add_model_specific_args(parser)
         elif args.model == "lambda":
             parser = LamdaUnetModule.add_model_specific_args(parser)
+        elif args.model == "vnet":
+            parser = VnetModule.add_model_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -35,6 +37,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             return UnetModule(**kwargs)
         elif model == "lambda":
             return LamdaUnetModule(**kwargs)
+        elif model == "vnet":
+            return VnetModule(**kwargs)
         else:
             raise NotImplementedError
     else:

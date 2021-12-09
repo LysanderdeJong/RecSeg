@@ -153,10 +153,5 @@ if __name__ == '__main__':
                         choices=['simple', 'advanced', 'pytorch'],
                         help='Code profiler.')
     
-    parser.add_argument('--lev1', default='test')
-    parser.add_argument('--lev1.opt1', default='from default 1')  
-    parser.add_argument('--lev1.opt2', default='from default 2') 
-    
-    
     args = parser.parse_args()
     train(args)
