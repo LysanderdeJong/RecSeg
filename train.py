@@ -152,6 +152,6 @@ if __name__ == '__main__':
     parser.add_argument('--profiler', default=None, type=str,
                         choices=['simple', 'advanced', 'pytorch'],
                         help='Code profiler.')
-    
+
     args = parser.parse_args()
     train(args)
