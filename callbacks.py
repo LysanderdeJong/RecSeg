@@ -128,6 +128,8 @@ class InferenceTimeCallback(pl.Callback):
     @rank_zero_only
     @torch.no_grad()
     def on_pretrain_routine_start(self, trainer, pl_module):
+        if pl_module.training:
+            pl_module.eval()
         dummy_input = torch.randn(1, 2, 512, 512, dtype=torch.float, device=pl_module.device)
         starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
         repetitions = 300
@@ -153,3 +155,4 @@ class InferenceTimeCallback(pl.Callback):
             
         del dummy_input
         del timings
+        pl_module.train()

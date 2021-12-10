@@ -38,7 +38,7 @@ def train(args):
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
                          auto_select_gpus=True,
-                         gpus=None if args.gpus == "None" else int(args.gpus),
+                         gpus=[2], #None if args.gpus == "None" else int(args.gpus),
                          #strategy=DDPPlugin(find_unused_parameters=False),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
@@ -105,7 +105,7 @@ if __name__ == '__main__':
                         help='Number of epochs to train.')
     
     parser.add_argument('--precision', default=32, type=int,
-                        choices=[16, 32, 64, 'bf16'],
+                        choices=['16', '32', '64', 'bf16'],
                         help='At what precision the model should train.')
     parser.add_argument('--grad_batch', default=1, type=int,
                         help='Accumulate gradient to simulate larger batch sizes.')
@@ -114,7 +114,7 @@ if __name__ == '__main__':
     parser.add_argument('--plugins', default=None, type=str,
                         help='Modify the multi-gpu training path. See docs lightning docs for details.')
     
-    parser.add_argument('--gpus', default=1, type=str,
+    parser.add_argument('--gpus', default='1', type=str,
                         help='Which gpus to use.')
     
     parser.add_argument('--checkpoint_path', default=None, type=str,
