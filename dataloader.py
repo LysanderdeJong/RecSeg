@@ -100,7 +100,7 @@ class skmtea(Dataset):
             out[:, :, :, 3] = np.logical_or(out[:, :, :, 3], out[:, :, :, 4])
             out[:, :, :, 4] = np.logical_or(out[:, :, :, 5], out[:, :, :, 6])
             out = out[:, :, :, :5]
-        return out.astype(np.int8)
+        return out.astype(np.uint8)
 
 
 class DataModule(pl.LightningDataModule):
@@ -159,7 +159,7 @@ class DataModule(pl.LightningDataModule):
                           shuffle=False, num_workers=self.hparams.num_workers)
     
     @staticmethod
-    def add_data_specific_args(parent_parser):  # pragma: no-cover
+    def add_data_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("Dataset")
 
         # dataset arguments
