@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.plugins import DDPPlugin
 
-from callbacks import PrintCallback, LogCallback, NumParamCallback, InferenceTimeCallback, LogSegmentationMasksSKMTEA
+from callbacks import PrintCallback, LogCallback, NumParamCallback, InferenceTimeCallback, LogSegmentationMasksSKMTEA, LogSegmentationMasksDWI
 from utils import parse_known_args, get_dataset, get_model
 
 def train(args):
@@ -21,7 +21,7 @@ def train(args):
     modelcheckpoint = ModelCheckpoint(monitor='val_loss', mode='min', save_top_k=1,
                                       save_last=True, filename='{epoch}-{val_loss:.4f}')
     callbacks.append(modelcheckpoint)
-    callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
+    # callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
     callbacks.append(EarlyStopping(monitor='val_loss', mode='min', patience=7))
     callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
@@ -29,8 +29,11 @@ def train(args):
     callbacks.append(NumParamCallback())
     callbacks.append(InferenceTimeCallback())
     if args.wandb:
-        wandb_logger = WandbLogger(project="mri-segmentation", log_model="all", entity="lysander")
-        callbacks.append(LogSegmentationMasksSKMTEA())
+        wandb_logger = WandbLogger(project="dwi-segmentation", log_model="all", entity="lysander")
+        if args.dataset == "skmtea":
+            callbacks.append(LogSegmentationMasksSKMTEA())
+        elif args.dataset == "braindwi":
+            callbacks.append(LogSegmentationMasksDWI())
     else:
         callbacks.append(LogCallback())
     if not args.progress_bar:
@@ -38,7 +41,7 @@ def train(args):
         
     trainer = pl.Trainer(default_root_dir=args.log_dir,
                          auto_select_gpus=True,
-                         gpus=[2], #None if args.gpus == "None" else int(args.gpus),
+                         gpus=[0], #None if args.gpus == "None" else int(args.gpus),
                          #strategy=DDPPlugin(find_unused_parameters=False),
                          max_epochs=args.epochs,
                          callbacks=callbacks,
@@ -101,7 +104,7 @@ if __name__ == '__main__':
     parser = get_dataset(parser=parser, args=temp_args)
     
     # trainer hyperparameters
-    parser.add_argument('--epochs', default=40, type=int,
+    parser.add_argument('--epochs', default=200, type=int,
                         help='Number of epochs to train.')
     
     parser.add_argument('--precision', default=32, type=int,

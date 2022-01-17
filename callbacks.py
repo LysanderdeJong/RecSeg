@@ -95,6 +95,75 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
         self.targets = []
         self.predictions = []
 
+class LogSegmentationMasksDWI(pl.Callback):
+    def __init__(self, num_examples=5):
+        super().__init__()
+        self.num_examples = num_examples
+        self.class_labels = {
+        2: {
+            0: "Background",
+            1: "Lesion"
+        }}
+        
+        self.inputs = []
+        self.targets = []
+        self.predictions = []
+        self.metrics = []
+    
+    @rank_zero_only
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+        if batch_idx == 1:
+            input, target = batch
+            if len(input.shape) == 5:
+                input = rearrange(input, 'b t c h w -> (b t) c h w')
+            if len(target.shape) == 5:
+                target = rearrange(target, 'b t c h w -> (b t) c h w')
+            self.num_classes = target.shape[1]
+            target = torch.argmax(target, dim=1)
+            prediction = torch.nn.functional.softmax(outputs[0], dim=1)
+            prediction = torch.argmax(prediction, dim=1)
+            
+            self.inputs = input
+            self.targets = target
+            self.predictions = prediction
+            self.metrics = outputs[1]
+
+    @rank_zero_only
+    def on_validation_end(self, trainer, pl_module):
+        num_examples = min(self.num_examples, self.inputs.shape[0])
+        image_list = []
+        masks = []
+        captions = []
+        for i in range(num_examples):
+            image = self.inputs[i, :, :, :]
+            image = image/image.max()*255
+            image = rearrange(image, "c h w -> h w c")
+            image = image.cpu().numpy().astype(np.uint8)
+
+            target = self.targets[i, :, :].cpu().numpy().astype(np.uint8)
+
+            prediction = self.predictions[i, :, :].cpu().numpy().astype(np.uint8)
+
+            image_list.append(image)
+            mask_dict = {
+                "predictions":{
+                    "mask_data": prediction,
+                    "class_labels": self.class_labels[self.num_classes]
+                },
+                "groud_truth":{
+                    "mask_data": target,
+                    "class_labels": self.class_labels[self.num_classes]
+                }
+            }
+            masks.append(mask_dict)
+            caption_str = f"DSC: {self.metrics['dice_score'][i].item():.3f}"
+            captions.append(caption_str)
+
+        trainer.logger.log_image(key="Predictions", images=image_list, masks=masks, caption=captions)
+        self.inputs = []
+        self.targets = []
+        self.predictions = []
+
 class PrintCallback(pl.Callback):
     def __init__(self):
         super().__init__()
@@ -130,7 +199,7 @@ class InferenceTimeCallback(pl.Callback):
     def on_pretrain_routine_start(self, trainer, pl_module):
         if pl_module.training:
             pl_module.eval()
-        dummy_input = torch.randn(1, 2, 512, 512, dtype=torch.float, device=pl_module.device)
+        dummy_input = torch.randn(1, pl_module.hparams.in_chans, 256, 256, dtype=torch.float, device=pl_module.device)
         starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
         repetitions = 300
         timings=torch.zeros(repetitions)
@@ -145,7 +214,9 @@ class InferenceTimeCallback(pl.Callback):
             torch.cuda.synchronize()
             curr_time = starter.elapsed_time(ender)
             timings[rep] = curr_time
-                
+
+        timings /= (dummy_input.shape[0] * dummy_input.shape[1])
+        
         print(f"Inference time: {timings.mean():0.3f}ms ± {timings.std():0.3f}ms.")
         
         if isinstance(trainer.logger.experiment, torch.utils.tensorboard.writer.SummaryWriter):

@@ -57,6 +57,7 @@ class UnetModule(pl.LightningModule):
         
         if len(input.shape) == 5:
             input = rearrange(input, 'b t c h w -> (b t) c h w')
+        if len(target.shape) == 5:
             target = rearrange(target, 'b t c h w -> (b t) c h w')
             
         output = self(input)
@@ -179,6 +180,7 @@ class LamdaUnetModule(pl.LightningModule):
         
         if len(input.shape) == 5:
             input = rearrange(input, 'b t c h w -> (b t) c h w')
+        if len(target.shape) == 5:
             target = rearrange(target, 'b t c h w -> (b t) c h w')
             
         output = self(input)
@@ -311,6 +313,7 @@ class VnetModule(pl.LightningModule):
         
         if len(input.shape) == 5:
             input = rearrange(input, 'b t c h w -> (b t) c h w')
+        if len(target.shape) == 5:
             target = rearrange(target, 'b t c h w -> (b t) c h w')
             
         output = self(input)
