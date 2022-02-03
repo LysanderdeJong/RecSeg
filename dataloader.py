@@ -257,15 +257,16 @@ class brain_dwi(Dataset):
         fmri, mri_slice = self.mri_slices[idx]
         fmask, mask_slice = self.mask_slices[idx]
         
-        mri = np.array(nib.load(fmri).dataobj[:, :, mri_slice:mri_slice+self.seq_len])
-        mask = np.array(nib.load(fmask).dataobj[:, :, mask_slice:mask_slice+self.seq_len])
+        mri = np.array(nib.as_closest_canonical(nib.load(fmri)).dataobj[:, :, mri_slice:mri_slice+self.seq_len])
+        mask = np.array(nib.as_closest_canonical(nib.load(fmask)).dataobj[:, :, mask_slice:mask_slice+self.seq_len])
 
         mri_image = torch.from_numpy(mri.astype(np.float32))
         if len(mri_image.shape) == 4:
             mri_image = mri_image[:, :, :, 0]
-        seg_mask = torch.from_numpy(self.convert_mask(mask))
 
-        mri_image = rearrange(mri_image, 'x y z -> z x y')
+        seg_mask = torch.from_numpy(self.convert_mask(mask, compact=True))
+
+        mri_image = rearrange(mri_image, 'x y z -> z () x y')
         seg_mask = rearrange(seg_mask, 'h w c s -> c s h w')
 
         if self.input_transform:
@@ -276,11 +277,14 @@ class brain_dwi(Dataset):
         
         return mri_image, seg_mask
 
-    def convert_mask(self, mask, n_classes=2):
+    def convert_mask(self, mask, n_classes=6, compact=False):
         x, y, z = mask.shape
         out = np.zeros((x, y, z, n_classes), dtype=np.bool)
         for i in range(n_classes):
             out[:, :, :, i] = (mask == i)
+        if compact:
+            out[:, :, :, 1] = np.logical_or.reduce((out[:, :, :, 1], out[:, :, :, 2], out[:, :, :, 3], out[:, :, :, 4], out[:, :, :, 5]))
+            out = out[:, :, :, :2]
         return out.astype(np.uint8)
 
 
@@ -342,7 +346,7 @@ class BrainDWIDataModule(pl.LightningDataModule):
                             help="Size of the slice looked at.")
         parser.add_argument("--train_fraction", default=0.8, type=float,
                             help="Fraction of th data used for training.") 
-        parser.add_argument("--use_cache", default=True, type=bool,
+        parser.add_argument("--use_cache", default=False, type=bool,
                             help="Whether to cache dataset metadata in a pkl file")
         parser.add_argument("--compact_masks", default=False, type=bool,
                             help="Whether to cache dataset metadata in a pkl file")

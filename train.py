@@ -18,7 +18,7 @@ def train(args):
 
     # Create a PyTorch Lightning trainer
     callbacks = []
-    modelcheckpoint = ModelCheckpoint(monitor='val_loss', mode='min', save_top_k=1,
+    modelcheckpoint = ModelCheckpoint(monitor='val_dice_score', mode='max', save_top_k=1,
                                       save_last=True, filename='{epoch}-{val_loss:.4f}')
     callbacks.append(modelcheckpoint)
     # callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))

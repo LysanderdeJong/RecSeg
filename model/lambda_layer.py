@@ -54,7 +54,7 @@ class LambdaLayer(nn.Module):
                                       padding = (0, temporal_kernel // 2))
 
     def forward(self, input):
-        batch, channel, height, width = *input.shape, 
+        batch, channel, height, width = *input.shape,
 
         q = self.to_q(input)
         k = self.to_k(input)

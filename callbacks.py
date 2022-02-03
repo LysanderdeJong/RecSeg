@@ -1,3 +1,4 @@
+from itertools import product
 import torch
 import numpy as np
 from einops import rearrange
@@ -102,7 +103,15 @@ class LogSegmentationMasksDWI(pl.Callback):
         self.class_labels = {
         2: {
             0: "Background",
-            1: "Lesion"
+            1: "Infarct Lesion"
+        },
+        5: {
+            0: "Background",
+            1: "Infarct Lesion",
+            2: "Infarct Lesion",
+            3: "Infarct Lesion",
+            4: "MRI Infarct Lesion",
+            5: "Infarct Lesion"
         }}
         
         self.inputs = []
@@ -136,6 +145,7 @@ class LogSegmentationMasksDWI(pl.Callback):
         captions = []
         for i in range(num_examples):
             image = self.inputs[i, :, :, :]
+            image -= image.min()
             image = image/image.max()*255
             image = rearrange(image, "c h w -> h w c")
             image = image.cpu().numpy().astype(np.uint8)
@@ -199,7 +209,8 @@ class InferenceTimeCallback(pl.Callback):
     def on_pretrain_routine_start(self, trainer, pl_module):
         if pl_module.training:
             pl_module.eval()
-        dummy_input = torch.randn(1, pl_module.hparams.in_chans, 256, 256, dtype=torch.float, device=pl_module.device)
+        dummy_input = pl_module.example_input_array
+        dummy_input = dummy_input.to(pl_module.device)
         starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
         repetitions = 300
         timings=torch.zeros(repetitions)
@@ -215,7 +226,7 @@ class InferenceTimeCallback(pl.Callback):
             curr_time = starter.elapsed_time(ender)
             timings[rep] = curr_time
 
-        timings /= (dummy_input.shape[0] * dummy_input.shape[1])
+        timings /= np.prod([dummy_input.shape[i] for i in range(len(dummy_input.shape)-2)])
         
         print(f"Inference time: {timings.mean():0.3f}ms ± {timings.std():0.3f}ms.")
         

@@ -3,7 +3,7 @@ import torch
 from einops import rearrange
 
 from dataloader import SKMDataModule, BrainDWIDataModule
-from pl_model import UnetModule, LamdaUnetModule, VnetModule
+from pl_model import UnetModule, LamdaUnetModule, VnetModule, DeepLabModule, Unet3dModule
 
 
 def segmentation_volume_to_img(seg):
@@ -29,6 +29,10 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             parser = LamdaUnetModule.add_model_specific_args(parser)
         elif args.model == "vnet":
             parser = VnetModule.add_model_specific_args(parser)
+        elif args.model == "deeplab":
+            parser = DeepLabModule.add_model_specific_args(parser)
+        elif args.model == "unet3d":
+            parser = Unet3dModule.add_model_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -39,6 +43,10 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             return LamdaUnetModule(**kwargs)
         elif model == "vnet":
             return VnetModule(**kwargs)
+        elif model == "deeplab":
+            return DeepLabModule(**kwargs)
+        elif model == "unet3d":
+            return Unet3dModule(**kwargs)
         else:
             raise NotImplementedError
     else:
