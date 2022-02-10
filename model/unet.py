@@ -59,7 +59,7 @@ class Unet(nn.Module):
         chans: int = 32,
         num_pool_layers: int = 4,
         drop_prob: float = 0.0,
-        block = ConvBlock,
+        block=ConvBlock,
         **kwargs
     ):
         """

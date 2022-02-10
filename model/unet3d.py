@@ -48,7 +48,7 @@ class Unet3d(nn.Module):
     PyTorch implementation of a U-Net model.
     O. Ronneberger, P. Fischer, and Thomas Brox. U-net: Convolutional networks
     for biomedical image segmentation. In International Conference on Medical
-    image computing and computer-assisted intervention, pages 234–241.
+    image computing and computer-assisted intervention, pages 234-241.
     Springer, 2015.
     """
 
@@ -59,7 +59,7 @@ class Unet3d(nn.Module):
         chans: int = 32,
         num_pool_layers: int = 4,
         drop_prob: float = 0.0,
-        block = Conv3dBlock,
+        block=Conv3dBlock,
         **kwargs
     ):
         """
@@ -78,7 +78,9 @@ class Unet3d(nn.Module):
         self.num_pool_layers = num_pool_layers
         self.drop_prob = drop_prob
 
-        self.down_sample_layers = nn.ModuleList([Conv3dBlock(in_chans, chans, drop_prob)])
+        self.down_sample_layers = nn.ModuleList(
+            [Conv3dBlock(in_chans, chans, drop_prob)]
+        )
         ch = chans
         for _ in range(num_pool_layers - 1):
             self.down_sample_layers.append(block(ch, ch * 2, drop_prob, **kwargs))
@@ -114,7 +116,9 @@ class Unet3d(nn.Module):
         for layer in self.down_sample_layers:
             output = layer(output)
             stack.append(output)
-            output = F.avg_pool3d(output, kernel_size=(1, 2, 2), stride=(1, 2, 2), padding=0)
+            output = F.avg_pool3d(
+                output, kernel_size=(1, 2, 2), stride=(1, 2, 2), padding=0
+            )
 
         output = self.conv(output)
 

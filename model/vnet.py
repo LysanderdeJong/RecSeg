@@ -4,13 +4,13 @@ import torch.nn.functional as F
 
 
 class LUConv(nn.Module):
-    def __init__(self, nchan: int, act: nn.Module=nn.ELU, bias: bool = False):
+    def __init__(self, nchan: int, act: nn.Module = nn.ELU, bias: bool = False):
         super().__init__()
 
         self.layers = nn.Sequential(
             nn.Conv2d(nchan, nchan, kernel_size=5, padding=2, bias=bias),
             nn.BatchNorm2d(nchan),
-            act(inplace=True)
+            act(inplace=True),
         )
 
     def forward(self, x):
@@ -18,7 +18,7 @@ class LUConv(nn.Module):
         return out
 
 
-def _make_nconv(nchan: int, depth: int, act: nn.Module=nn.ELU, bias: bool = False):
+def _make_nconv(nchan: int, depth: int, act: nn.Module = nn.ELU, bias: bool = False):
     layers = []
     for _ in range(depth):
         layers.append(LUConv(nchan=nchan, act=act, bias=bias))
@@ -29,20 +29,22 @@ class InputTransition(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        out_channels: int=16,
-        act: nn.Module=nn.ELU,
+        out_channels: int = 16,
+        act: nn.Module = nn.ELU,
         bias: bool = False,
     ):
         super().__init__()
 
         if out_channels % in_channels != 0:
-            raise ValueError(f"16 should be divisible by in_channels, got in_channels={in_channels}.")
+            raise ValueError(
+                f"16 should be divisible by in_channels, got in_channels={in_channels}."
+            )
 
         self.in_channels = in_channels
         self.act_function = act(inplace=True)
         self.conv_block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=5, padding=2, bias=bias),
-            nn.BatchNorm2d(out_channels)
+            nn.BatchNorm2d(out_channels),
         )
 
     def forward(self, x):
@@ -57,14 +59,16 @@ class DownTransition(nn.Module):
         self,
         in_channels: int,
         nconvs: int,
-        act: nn.Module=nn.ELU,
+        act: nn.Module = nn.ELU,
         dropout_prob: float = 0.0,
         bias: bool = False,
     ):
         super().__init__()
 
         out_channels = 2 * in_channels
-        self.down_conv = nn.Conv2d(in_channels, out_channels, kernel_size=2, stride=2, bias=bias)
+        self.down_conv = nn.Conv2d(
+            in_channels, out_channels, kernel_size=2, stride=2, bias=bias
+        )
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.act_function1 = act(inplace=True)
         self.act_function2 = act(inplace=True)
@@ -88,12 +92,14 @@ class UpTransition(nn.Module):
         in_channels: int,
         out_channels: int,
         nconvs: int,
-        act: nn.Module=nn.ELU,
-        dropout_prob: float = 0.0
+        act: nn.Module = nn.ELU,
+        dropout_prob: float = 0.0,
     ):
         super().__init__()
 
-        self.up_conv = nn.ConvTranspose2d(in_channels, out_channels // 2, kernel_size=2, stride=2)
+        self.up_conv = nn.ConvTranspose2d(
+            in_channels, out_channels // 2, kernel_size=2, stride=2
+        )
         self.bn1 = nn.BatchNorm2d(out_channels // 2)
         self.dropout = nn.Dropout2d(dropout_prob) if dropout_prob > 0.0 else None
         self.dropout2 = nn.Dropout2d(0.5)
@@ -119,7 +125,7 @@ class OutputTransition(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        act: nn.Module=nn.ELU,
+        act: nn.Module = nn.ELU,
         bias: bool = False,
     ):
         super().__init__()
@@ -127,7 +133,7 @@ class OutputTransition(nn.Module):
         self.conv_block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=5, padding=2, bias=bias),
             nn.BatchNorm2d(out_channels),
-            act(inplace=True)
+            act(inplace=True),
         )
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=1)
 
@@ -152,8 +158,12 @@ class Vnet(nn.Module):
         self.in_tr = InputTransition(in_channels, 16, act, bias=bias)
         self.down_tr32 = DownTransition(16, 1, act, bias=bias)
         self.down_tr64 = DownTransition(32, 2, act, bias=bias)
-        self.down_tr128 = DownTransition(64, 3, act, dropout_prob=dropout_prob, bias=bias)
-        self.down_tr256 = DownTransition(128, 2, act, dropout_prob=dropout_prob, bias=bias)
+        self.down_tr128 = DownTransition(
+            64, 3, act, dropout_prob=dropout_prob, bias=bias
+        )
+        self.down_tr256 = DownTransition(
+            128, 2, act, dropout_prob=dropout_prob, bias=bias
+        )
         self.up_tr256 = UpTransition(256, 256, 2, act, dropout_prob=dropout_prob)
         self.up_tr128 = UpTransition(256, 128, 2, act, dropout_prob=dropout_prob)
         self.up_tr64 = UpTransition(128, 64, 1, act)

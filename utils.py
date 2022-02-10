@@ -3,7 +3,13 @@ import torch
 from einops import rearrange
 
 from dataloader import SKMDataModule, BrainDWIDataModule
-from pl_model import UnetModule, LamdaUnetModule, VnetModule, DeepLabModule, Unet3dModule
+from pl_model import (
+    UnetModule,
+    LamdaUnetModule,
+    VnetModule,
+    DeepLabModule,
+    Unet3dModule,
+)
 
 
 def segmentation_volume_to_img(seg):
@@ -16,10 +22,11 @@ def segmentation_volume_to_img(seg):
 
     if isinstance(seg, np.ndarray):
         img = np.argmax(seg, axis=c_dim)
-        img = rearrange(img, 'c h w -> h w c')
+        img = rearrange(img, "c h w -> h w c")
     elif isinstance(seg, torch.Tensor):
         img = torch.argmax(seg, dim=c_dim)
     return img
+
 
 def get_model(parser=None, args=None, model=None, **kwargs):
     if parser and args:
@@ -52,6 +59,7 @@ def get_model(parser=None, args=None, model=None, **kwargs):
     else:
         raise ValueError
 
+
 def get_dataset(parser=None, args=None, dataset=None, **kwargs):
     if parser and args:
         if args.dataset == "skmtea":
@@ -71,6 +79,7 @@ def get_dataset(parser=None, args=None, dataset=None, **kwargs):
     else:
         raise ValueError
 
+
 import sys
 import inspect
 import argparse
@@ -79,6 +88,7 @@ from jsonargparse.util import ParserError, _lenient_check_context
 from jsonargparse.typehints import ActionTypeHint
 from jsonargparse.loaders_dumpers import load_value_context
 from unittest.mock import patch
+
 
 def parse_known_args(self, args=None, namespace=None):
     """Raises NotImplementedError to dissuade its use, since typos in configs would go unnoticed."""
@@ -90,17 +100,23 @@ def parse_known_args(self, args=None, namespace=None):
     else:
         args = list(args)
         if not all(isinstance(a, str) for a in args):
-            self.error(f'All arguments are expected to be strings: {args}')
+            self.error(f"All arguments are expected to be strings: {args}")
 
     if namespace is None:
         namespace = Namespace()
 
-    if caller == 'argcomplete':
+    if caller == "argcomplete":
         namespace.__class__ = Namespace
-        namespace = self.merge_config(self.get_defaults(skip_check=True), namespace).as_flat()
+        namespace = self.merge_config(
+            self.get_defaults(skip_check=True), namespace
+        ).as_flat()
 
     try:
-        with patch('argparse.Namespace', Namespace), _lenient_check_context(caller), ActionTypeHint.subclass_arg_context(self), load_value_context(self.parser_mode):
+        with patch("argparse.Namespace", Namespace), _lenient_check_context(
+            caller
+        ), ActionTypeHint.subclass_arg_context(self), load_value_context(
+            self.parser_mode
+        ):
             namespace, args = self._parse_known_args(args, namespace)
     except (argparse.ArgumentError, ParserError) as ex:
         self.error(str(ex), ex)
