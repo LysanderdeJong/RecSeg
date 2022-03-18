@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from einops import rearrange
 
-from dataloader import SKMDataModule, BrainDWIDataModule
+from dataloader import SKMDataModule, BrainDWIDataModule, TecFideraDataModule
 from pl_model import (
     UnetModule,
     LamdaUnetModule,
@@ -66,6 +66,8 @@ def get_dataset(parser=None, args=None, dataset=None, **kwargs):
             parser = SKMDataModule.add_data_specific_args(parser)
         elif args.dataset == "braindwi":
             parser = BrainDWIDataModule.add_data_specific_args(parser)
+        elif args.dataset == "tecfidera":
+            parser = TecFideraDataModule.add_data_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -74,6 +76,8 @@ def get_dataset(parser=None, args=None, dataset=None, **kwargs):
             return SKMDataModule(**kwargs)
         elif dataset == "braindwi":
             return BrainDWIDataModule(**kwargs)
+        elif dataset == "tecfidera":
+            return TecFideraDataModule(**kwargs)
         else:
             raise NotImplementedError
     else:

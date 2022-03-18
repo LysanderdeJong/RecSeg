@@ -532,3 +532,228 @@ class BrainDWIDataModule(pl.LightningDataModule):
         )
 
         return parent_parser
+
+
+class TecFidera(Dataset):
+    def __init__(
+        self,
+        split,
+        data_files,
+        data_root="/data/projects/tecfidera/data/h5_recon_dataset/",
+        seq_len=1,
+        use_cache=True,
+        compact_masks=True,
+    ):
+        self.split = split
+        self.data_root = data_root
+        self.seq_len = seq_len
+        self.compact_masks = compact_masks
+        self.input_transform = transforms.Resize([256,], antialias=True,)
+        self.target_transform = transforms.Resize(
+            [256,], interpolation=transforms.InterpolationMode.NEAREST,
+        )
+
+        cache_file = f"./.cache/tecfidera_cache_{split}.pkl"
+        if os.path.isfile(cache_file) and use_cache:
+            with open(cache_file, "rb") as f:
+                dataset_cache = pickle.load(f)
+            print("Using saved cache.")
+        else:
+            dataset_cache = []
+
+        file_names = data_files[split]
+        file_names.sort()
+
+        if os.path.isfile(cache_file) and use_cache:
+            self.mri_slices = dataset_cache[0]
+            self.mask_slices = dataset_cache[1]
+        else:
+            self.mri_slices = []
+            self.mask_slices = []
+
+            print("Generating cache file.")
+
+            for file_name in file_names:
+                mri_path = os.path.join(data_root, file_name)
+
+                mri = h5py.File(mri_path, "r")
+
+                mri_shape = mri["reconstruction_sense"].shape[0]
+                mask_shape = mri["lesion_segmentation"].shape[0]
+
+                mri_num_slices = mri_shape - self.seq_len + 1
+                mask_num_slices = mask_shape - self.seq_len + 1
+
+                self.mri_slices += [(mri_path, i) for i in range(mri_num_slices)]
+                self.mask_slices += [(mri_path, i) for i in range(mask_num_slices)]
+
+            assert len(self.mri_slices) == len(self.mask_slices)
+
+            dataset_cache.append(self.mri_slices)
+            dataset_cache.append(self.mask_slices)
+
+            if use_cache:
+                os.makedirs("./.cache", exist_ok=True)
+                with open(cache_file, "wb") as f:
+                    pickle.dump(dataset_cache, f)
+                print(f"Saving cache to {cache_file}.")
+                del dataset_cache
+
+    def __len__(self):
+        return len(self.mask_slices)
+
+    def __getitem__(self, idx):
+        fmri, mri_slice = self.mri_slices[idx]
+        fmask, mask_slice = self.mask_slices[idx]
+
+        mri = np.array(
+            h5py.File(fmri, "r")["reconstruction_sense"][
+                mri_slice : mri_slice + self.seq_len, :, :
+            ]
+        )
+        mask = np.array(
+            h5py.File(fmask, "r")["lesion_segmentation"][
+                mask_slice : mask_slice + self.seq_len, :, :
+            ]
+        )
+
+        mri_image = to_tensor(mri)
+        seg_mask = torch.from_numpy(self.convert_mask(mask, compact=self.compact_masks))
+
+        mri_image = rearrange(mri_image, "z x y c -> z c x y")
+        seg_mask = rearrange(seg_mask, "c h w s -> c s h w")
+
+        if self.input_transform:
+            mri_image = self.input_transform(mri_image)
+
+        if self.target_transform:
+            seg_mask = self.target_transform(seg_mask)
+
+        return mri_image, seg_mask
+
+    def convert_mask(self, mask, n_classes=2, compact=False):
+        x, y, z = mask.shape
+        out = np.zeros((x, y, z, n_classes), dtype=np.bool)
+        for i in range(n_classes):
+            out[:, :, :, i] = mask == i
+        if compact:
+            out[:, :, :, 1] = np.logical_or.reduce(
+                (
+                    out[:, :, :, 1],
+                    out[:, :, :, 2],
+                    out[:, :, :, 3],
+                    out[:, :, :, 4],
+                    out[:, :, :, 5],
+                )
+            )
+            out = out[:, :, :, :2]
+        return out.astype(np.uint8)
+
+
+class TecFideraDataModule(pl.LightningDataModule):
+    def __init__(
+        self, data_root, seq_len=1, use_cache=True, **kwargs,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+        self.file_split = {}
+
+        file_names = os.listdir(os.path.join(data_root))
+        self.file_split["all"] = file_names
+
+    def _make_dataset(self, split, data_files):
+        return TecFidera(
+            split,
+            data_files,
+            self.hparams.data_root,
+            self.hparams.seq_len,
+            self.hparams.use_cache,
+            self.hparams.compact_masks,
+        )
+
+    def setup(self, stage=None):
+        if stage == "fit" or stage is None:
+            dataset = self._make_dataset("all", self.file_split)
+            self.train, self.val = random_split(
+                dataset,
+                [
+                    int(self.hparams.train_fraction * len(dataset)),
+                    len(dataset) - (int(self.hparams.train_fraction * len(dataset))),
+                ],
+            )
+            self.val, self.test = random_split(
+                self.val, [len(self.val) // 2, len(self.val) - len(self.val) // 2]
+            )
+
+        if stage == "test" or stage is None:
+            pass
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train,
+            batch_size=self.hparams.batch_size,
+            shuffle=True,
+            num_workers=self.hparams.num_workers,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            num_workers=self.hparams.num_workers,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            num_workers=self.hparams.num_workers,
+        )
+
+    @staticmethod
+    def add_data_specific_args(parent_parser):
+        parser = parent_parser.add_argument_group("Dataset")
+
+        # dataset arguments
+        parser.add_argument(
+            "--data_root",
+            default="/data/projects/tecfidera/data/h5_recon_dataset/",
+            type=str,
+            help="Path to the data root",
+        )
+        parser.add_argument(
+            "--seq_len", default=1, type=int, help="Size of the slice looked at."
+        )
+        parser.add_argument(
+            "--train_fraction",
+            default=0.8,
+            type=float,
+            help="Fraction of th data used for training.",
+        )
+        parser.add_argument(
+            "--use_cache",
+            default=False,
+            type=bool,
+            help="Whether to cache dataset metadata in a pkl file",
+        )
+        parser.add_argument(
+            "--compact_masks",
+            default=True,
+            type=bool,
+            help="Whether to cache dataset metadata in a pkl file",
+        )
+
+        # data loader arguments
+        parser.add_argument(
+            "--batch_size", default=1, type=int, help="Data loader batch size"
+        )
+        parser.add_argument(
+            "--num_workers",
+            default=4,
+            type=int,
+            help="Number of workers to use in data loader",
+        )
+
+        return parent_parser
