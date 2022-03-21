@@ -9,6 +9,7 @@ from pl_model import (
     VnetModule,
     DeepLabModule,
     Unet3dModule,
+    AttUnetModule
 )
 
 
@@ -40,6 +41,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             parser = DeepLabModule.add_model_specific_args(parser)
         elif args.model == "unet3d":
             parser = Unet3dModule.add_model_specific_args(parser)
+        elif args.model == "attunet":
+            parser = AttUnetModule.add_model_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -54,6 +57,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             return DeepLabModule(**kwargs)
         elif model == "unet3d":
             return Unet3dModule(**kwargs)
+        elif model == "attunet":
+            return AttUnetModule(**kwargs)
         else:
             raise NotImplementedError
     else:
