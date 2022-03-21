@@ -625,11 +625,11 @@ class TecFidera(Dataset):
         mri_image = rearrange(mri_image, "z () x y c -> z c x y")
         seg_mask = rearrange(seg_mask, "c h w s -> c s h w")
 
-        if self.input_transform:
-            mri_image = self.input_transform(mri_image)
+        # if self.input_transform:
+        #     mri_image = self.input_transform(mri_image)
 
-        if self.target_transform:
-            seg_mask = self.target_transform(seg_mask)
+        # if self.target_transform:
+        #     seg_mask = self.target_transform(seg_mask)
 
         return mri_image, seg_mask
 

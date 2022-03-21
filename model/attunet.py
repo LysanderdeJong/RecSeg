@@ -2,7 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from unet import ConvBlock, TransposeConvBlock
+from model.unet import ConvBlock, TransposeConvBlock
+
 
 class AttentionGate(nn.Module):
     """
@@ -10,14 +11,14 @@ class AttentionGate(nn.Module):
     instance normalization, LeakyReLU activation and dropout.
     """
 
-    def __init__(self):
+    def __init__(self, in_chans_x: int, in_chans_g: int, out_chans: int):
         """
         Args:
             in_chans-_x: Number of channels in the input.
             in_chans-_x: Number of channels in the input.
             out_chans: Number of channels in the output.
         """
-        super().__init__(in_chans_g: int, in_chans_x: int, out_chans: int)
+        super().__init__()
 
         self.in_chans_g = in_chans_g
         self.in_chans_x = in_chans_x
@@ -26,11 +27,11 @@ class AttentionGate(nn.Module):
         self.W_g = nn.Sequential(
             nn.Conv2d(in_chans_g, out_chans, kernel_size=1, padding=0, bias=True),
         )
-        
+
         self.W_x = nn.Sequential(
             nn.Conv2d(in_chans_x, out_chans, kernel_size=1, padding=0, bias=False),
         )
-        
+
         self.psi = nn.Sequential(
             nn.Conv2d(out_chans, 1, kernel_size=1, padding=0, bias=True),
         )
@@ -43,12 +44,23 @@ class AttentionGate(nn.Module):
         Returns:
             Output tensor of shape `(N, out_chans, H, W)`.
         """
+        # print(x.shape, g.shape)
         W_x = self.W_x(x)
-        W_g = f.interpolate(self.W_g(g), size=(W_x.shape[-2], W_x.shape[-1]), mode="bilinear", antialias=True, align_corners=False)
+        W_g = F.interpolate(
+            self.W_g(g),
+            size=(W_x.shape[-2], W_x.shape[-1]),
+            mode="bilinear",
+            align_corners=False,
+        )
         f = F.relu(W_x + W_g, inplace=True)
         a = torch.sigmoid(self.psi(f))
-        a = f.interpolate(a, size=(x.shape[-2], x.shape[-1]), mode="bilinear", antialias=True, align_corners=False)
-        return a*x
+        a = F.interpolate(
+            a, size=(x.shape[-2], x.shape[-1]), mode="bilinear", align_corners=False
+        )
+
+        # print(a.shape, x.shape)
+        return a * x
+
 
 class AttUnet(nn.Module):
     """
@@ -95,7 +107,7 @@ class AttUnet(nn.Module):
         for _ in range(num_pool_layers - 1):
             self.up_transpose_conv.append(TransposeConvBlock(ch * 2, ch))
             self.up_conv.append(ConvBlock(ch * 2, ch, drop_prob))
-            self.up_attention_gates.append(AttentionGate(ch * 2, ch * 2, ch))
+            self.up_attention_gates.append(AttentionGate(ch, ch * 2, ch))
             ch //= 2
 
         self.up_transpose_conv.append(TransposeConvBlock(ch * 2, ch))
@@ -105,6 +117,7 @@ class AttUnet(nn.Module):
                 nn.Conv2d(ch, self.out_chans, kernel_size=1, stride=1),
             )
         )
+        self.up_attention_gates.append(AttentionGate(ch, ch * 2, ch))
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         """
@@ -125,7 +138,9 @@ class AttUnet(nn.Module):
         output = self.conv(output)
 
         # apply up-sampling layers
-        for transpose_conv, conv, attention_gate in zip(self.up_transpose_conv, self.up_conv, self.up_attention_gates):
+        for transpose_conv, conv, attention_gate in zip(
+            self.up_transpose_conv, self.up_conv, self.up_attention_gates
+        ):
             downsample_layer = stack.pop()
             downsample_layer = attention_gate(downsample_layer, output)
             output = transpose_conv(output)

@@ -1014,7 +1014,8 @@ class AttUnetModule(pl.LightningModule):
         self.cross_entropy = nn.CrossEntropyLoss()
 
     def forward(self, x):
-        x = F.group_norm(x, num_groups=1)
+        with torch.no_grad():
+            x = F.group_norm(x, num_groups=1)
         x = self.model(x)
         return x
 
