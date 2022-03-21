@@ -548,9 +548,9 @@ class TecFidera(Dataset):
         self.data_root = data_root
         self.seq_len = seq_len
         self.compact_masks = compact_masks
-        self.input_transform = transforms.Resize([256,], antialias=True,)
+        self.input_transform = transforms.Resize([256, 256], antialias=True,)
         self.target_transform = transforms.Resize(
-            [256,], interpolation=transforms.InterpolationMode.NEAREST,
+            [256, 256], interpolation=transforms.InterpolationMode.NEAREST,
         )
 
         cache_file = f"./.cache/tecfidera_cache_{split}.pkl"
@@ -606,9 +606,11 @@ class TecFidera(Dataset):
         fmri, mri_slice = self.mri_slices[idx]
         fmask, mask_slice = self.mask_slices[idx]
 
+        # print(h5py.File(fmri, "r")["reconstruction_sense"].shape)
+
         mri = np.array(
             h5py.File(fmri, "r")["reconstruction_sense"][
-                mri_slice : mri_slice + self.seq_len, :, :
+                mri_slice : mri_slice + self.seq_len, :, :, :
             ]
         )
         mask = np.array(
@@ -620,7 +622,7 @@ class TecFidera(Dataset):
         mri_image = to_tensor(mri)
         seg_mask = torch.from_numpy(self.convert_mask(mask, compact=self.compact_masks))
 
-        mri_image = rearrange(mri_image, "z x y c -> z c x y")
+        mri_image = rearrange(mri_image, "z () x y c -> z c x y")
         seg_mask = rearrange(seg_mask, "c h w s -> c s h w")
 
         if self.input_transform:
@@ -636,17 +638,6 @@ class TecFidera(Dataset):
         out = np.zeros((x, y, z, n_classes), dtype=np.bool)
         for i in range(n_classes):
             out[:, :, :, i] = mask == i
-        if compact:
-            out[:, :, :, 1] = np.logical_or.reduce(
-                (
-                    out[:, :, :, 1],
-                    out[:, :, :, 2],
-                    out[:, :, :, 3],
-                    out[:, :, :, 4],
-                    out[:, :, :, 5],
-                )
-            )
-            out = out[:, :, :, :2]
         return out.astype(np.uint8)
 
 

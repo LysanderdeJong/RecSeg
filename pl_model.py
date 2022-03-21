@@ -53,7 +53,8 @@ class UnetModule(pl.LightningModule):
         self.cross_entropy = nn.CrossEntropyLoss()
 
     def forward(self, x):
-        x = F.group_norm(x, num_groups=1)
+        with torch.no_grad():
+            x = F.group_norm(x, num_groups=1)
         x = self.model(x)
         return x
 
@@ -179,7 +180,8 @@ class LamdaUnetModule(pl.LightningModule):
         self.cross_entropy = nn.CrossEntropyLoss()
 
     def forward(self, x):
-        x = F.group_norm(x, num_groups=1)
+        with torch.no_grad():
+            x = F.group_norm(x, num_groups=1)
         x = self.model(x)
         return x
 
@@ -322,7 +324,8 @@ class VnetModule(pl.LightningModule):
         self.cross_entropy = nn.CrossEntropyLoss()
 
     def forward(self, x):
-        x = F.group_norm(x, num_groups=1)
+        with torch.no_grad():
+            x = F.group_norm(x, num_groups=1)
         x = self.model(x)
         return x
 
@@ -418,12 +421,7 @@ class VnetModule(pl.LightningModule):
 
 class DeepLabModule(pl.LightningModule):
     def __init__(
-        self,
-        in_chans=1,
-        out_chans=1,
-        lr=0.001,
-        weight_decay=0.0,
-        **kwargs,
+        self, in_chans=1, out_chans=1, lr=0.001, weight_decay=0.0, **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -444,7 +442,8 @@ class DeepLabModule(pl.LightningModule):
         self.cross_entropy = nn.CrossEntropyLoss()
 
     def forward(self, x):
-        x = F.group_norm(x, num_groups=1)
+        with torch.no_grad():
+            x = F.group_norm(x, num_groups=1)
         x = self.model(x)
         return x
 
@@ -573,7 +572,8 @@ class Unet3dModule(pl.LightningModule):
         self.cross_entropy = nn.CrossEntropyLoss()
 
     def forward(self, x):
-        x = F.group_norm(x, num_groups=1)
+        with torch.no_grad():
+            x = F.group_norm(x, num_groups=1)
         x = self.model(x)
         return x
 
@@ -681,7 +681,7 @@ class Unet3dModule(pl.LightningModule):
         return parent_parser
 
 
-from mridc.nn.cirim import CIRIM
+from mridc.collections.reconstruction.models.cirim import CIRIM
 
 
 class CIRIMModule(pl.LightningModule):
@@ -699,7 +699,7 @@ class CIRIMModule(pl.LightningModule):
         depth: int = 2,
         time_steps: int = 8,
         conv_dim: int = 2,
-        loss_fn: Union[nn.Module, str] = "l1",
+        loss_fn: str = "l1",
         num_cascades: int = 1,
         no_dc: bool = False,
         keep_eta: bool = False,
@@ -748,7 +748,8 @@ class CIRIMModule(pl.LightningModule):
         self.example_input_array = torch.rand(1, 32, 640, 320, 2, device=self.device)
 
     def forward(self, x):
-        x = F.group_norm(x, num_groups=1)
+        with torch.no_grad():
+            x = F.group_norm(x, num_groups=1)
         x = self.model(x)
         return x
 

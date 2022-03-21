@@ -21,6 +21,7 @@ from callbacks import (
     InferenceTimeCallback,
     LogSegmentationMasksSKMTEA,
     LogSegmentationMasksDWI,
+    LogSegmentationMasksTECFIDERA,
 )
 from utils import parse_known_args, get_dataset, get_model
 
@@ -49,12 +50,14 @@ def train(args):
     callbacks.append(InferenceTimeCallback())
     if args.wandb:
         wandb_logger = WandbLogger(
-            project="dwi-segmentation", log_model="all", entity="lysander"
+            project="techfidera-recseg", log_model="all", entity="lysander"
         )
         if args.dataset == "skmtea":
             callbacks.append(LogSegmentationMasksSKMTEA())
         elif args.dataset == "braindwi":
             callbacks.append(LogSegmentationMasksDWI())
+        elif args.dataset == "tecfidera":
+            callbacks.append(LogSegmentationMasksTECFIDERA())
     else:
         callbacks.append(LogCallback())
     if not args.progress_bar:
@@ -63,7 +66,7 @@ def train(args):
     trainer = pl.Trainer(
         default_root_dir=args.log_dir,
         auto_select_gpus=True,
-        gpus=[0],  # None if args.gpus == "None" else int(args.gpus),
+        gpus=[3],  # None if args.gpus == "None" else int(args.gpus),
         # strategy=DDPPlugin(find_unused_parameters=False),
         max_epochs=args.epochs,
         callbacks=callbacks,
