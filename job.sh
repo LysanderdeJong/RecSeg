@@ -1,1 +1,3 @@
 python train.py --progress_bar --precision 16 --batch_size 24 --num_workers 12 --data_root "/data/projects/recon/data/public/qdess/v1-release/" --mri_data_path "files_recon_calib-24/" --segmentation_path "segmentation_masks/raw-data-track/" --epochs 200 --wandb
+
+python train.py --progress_bar --model lambdaunet --dataset tecfidera --in_chans 2 --out_chans 2 --precision 32 --batch_size 1 --num_workers 12 --data_root "/data/projects/tecfidera/data/h5_recon_dataset/" --seq_len 3 --grad_batch 16 --epochs 200 --auto_lr --wandb

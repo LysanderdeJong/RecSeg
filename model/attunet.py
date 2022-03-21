@@ -25,15 +25,17 @@ class AttentionGate(nn.Module):
         self.out_chans = out_chans
 
         self.W_g = nn.Sequential(
-            nn.Conv2d(in_chans_g, out_chans, kernel_size=1, padding=0, bias=True),
+            nn.Conv2d(in_chans_g, out_chans, kernel_size=1, padding=0, bias=True)
         )
 
         self.W_x = nn.Sequential(
-            nn.Conv2d(in_chans_x, out_chans, kernel_size=1, padding=0, bias=False),
+            nn.Conv2d(
+                in_chans_x, out_chans, kernel_size=2, padding=0, stride=2, bias=False
+            )
         )
 
         self.psi = nn.Sequential(
-            nn.Conv2d(out_chans, 1, kernel_size=1, padding=0, bias=True),
+            nn.Conv2d(out_chans, 1, kernel_size=1, padding=0, bias=True)
         )
 
     def forward(self, x: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
