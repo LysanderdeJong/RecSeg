@@ -894,7 +894,7 @@ class CIRIMModule(pl.LightningModule):
             "--recurrent_kernels",
             nargs="+",
             type=int,
-            default=[3, 3, 3],
+            default=[1, 1, 0],
             help="Kernel size for the recurrent layers of the model",
         )
         parser.add_argument(
