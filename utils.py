@@ -2,14 +2,20 @@ import numpy as np
 import torch
 from einops import rearrange
 
-from dataloader import SKMDataModule, BrainDWIDataModule, TecFideraDataModule
+from dataloader import (
+    SKMDataModule,
+    BrainDWIDataModule,
+    TecFideraDataModule,
+    TecFideraMRIDataModule,
+)
 from pl_model import (
     UnetModule,
     LamdaUnetModule,
     VnetModule,
     DeepLabModule,
     Unet3dModule,
-    AttUnetModule
+    AttUnetModule,
+    CIRIMModule,
 )
 
 
@@ -43,6 +49,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             parser = Unet3dModule.add_model_specific_args(parser)
         elif args.model == "attunet":
             parser = AttUnetModule.add_model_specific_args(parser)
+        elif args.model == "cirim":
+            parser = CIRIMModule.add_model_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -59,6 +67,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             return Unet3dModule(**kwargs)
         elif model == "attunet":
             return AttUnetModule(**kwargs)
+        elif model == "cirim":
+            return CIRIMModule(**kwargs)
         else:
             raise NotImplementedError
     else:
@@ -73,6 +83,8 @@ def get_dataset(parser=None, args=None, dataset=None, **kwargs):
             parser = BrainDWIDataModule.add_data_specific_args(parser)
         elif args.dataset == "tecfidera":
             parser = TecFideraDataModule.add_data_specific_args(parser)
+        elif args.dataset == "tecfideramri":
+            parser = TecFideraMRIDataModule.add_data_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -83,6 +95,8 @@ def get_dataset(parser=None, args=None, dataset=None, **kwargs):
             return BrainDWIDataModule(**kwargs)
         elif dataset == "tecfidera":
             return TecFideraDataModule(**kwargs)
+        elif dataset == "tecfideramri":
+            return TecFideraMRIDataModule(**kwargs)
         else:
             raise NotImplementedError
     else:

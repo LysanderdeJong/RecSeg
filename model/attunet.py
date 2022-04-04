@@ -47,20 +47,22 @@ class AttentionGate(nn.Module):
             Output tensor of shape `(N, out_chans, H, W)`.
         """
         # print(x.shape, g.shape)
+        print(x.shape, g.shape)
         W_x = self.W_x(x)
+        w_g = self.W_g(g)
+        print(x.shape, g.shape)
         W_g = F.interpolate(
-            self.W_g(g),
+            w_g,
             size=(W_x.shape[-2], W_x.shape[-1]),
             mode="bilinear",
             align_corners=False,
         )
+        print(x.shape, g.shape)
         f = F.relu(W_x + W_g, inplace=True)
         a = torch.sigmoid(self.psi(f))
         a = F.interpolate(
             a, size=(x.shape[-2], x.shape[-1]), mode="bilinear", align_corners=False
         )
-
-        # print(a.shape, x.shape)
         return a * x
 
 

@@ -1,3 +1,4 @@
+import collections
 import os
 import jsonargparse
 import torch
@@ -14,7 +15,10 @@ from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.plugins import DDPPlugin
 
+from mridc.collections.common.parts.ptl_overrides import MRIDCNativeMixedPrecisionPlugin
+
 from callbacks import (
+    LogReconstructionTECFIDERA,
     PrintCallback,
     LogCallback,
     NumParamCallback,
@@ -34,15 +38,15 @@ def train(args):
     # Create a PyTorch Lightning trainer
     callbacks = []
     modelcheckpoint = ModelCheckpoint(
-        monitor="val_dice_score",
-        mode="max",
-        save_top_k=1,
+        monitor="val_loss",
+        mode="min",
+        save_top_k=5,
         save_last=True,
         filename="{epoch}-{val_loss:.4f}",
     )
     callbacks.append(modelcheckpoint)
     # callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
-    callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=7))
+    callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=10))
     callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval="step"))
@@ -58,6 +62,8 @@ def train(args):
             callbacks.append(LogSegmentationMasksDWI())
         elif args.dataset == "tecfidera":
             callbacks.append(LogSegmentationMasksTECFIDERA())
+        elif args.dataset == "tecfideramri":
+            callbacks.append(LogReconstructionTECFIDERA())
     else:
         callbacks.append(LogCallback())
     if not args.progress_bar:
@@ -66,7 +72,7 @@ def train(args):
     trainer = pl.Trainer(
         default_root_dir=args.log_dir,
         auto_select_gpus=True,
-        gpus=[3],  # None if args.gpus == "None" else int(args.gpus),
+        gpus=[1],  # None if args.gpus == "None" else int(args.gpus),
         # strategy=DDPPlugin(find_unused_parameters=False),
         max_epochs=args.epochs,
         callbacks=callbacks,
@@ -80,7 +86,7 @@ def train(args):
         resume_from_checkpoint=args.checkpoint_path,
         gradient_clip_val=args.grad_clip,
         benchmark=True if args.benchmark else False,
-        plugins=args.plugins,
+        # plugins=[MRIDCNativeMixedPrecisionPlugin()],
         profiler=args.profiler if args.profiler else None,
         enable_model_summary=False,
         logger=wandb_logger if args.wandb else True,
@@ -118,8 +124,8 @@ if __name__ == "__main__":
     parser = jsonargparse.ArgumentParser()
 
     # figure out which model to use
-    parser.add_argument("--model", default="unet", type=str)
-    parser.add_argument("--dataset", default="skmtea", type=str)
+    parser.add_argument("--model", type=str)
+    parser.add_argument("--dataset", type=str)
 
     temp_args, _ = parser.parse_known_args()
 
@@ -148,12 +154,6 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--grad_clip", default=None, type=float, help="Clip the gradient norm."
-    )
-    parser.add_argument(
-        "--plugins",
-        default=None,
-        type=str,
-        help="Modify the multi-gpu training path. See docs lightning docs for details.",
     )
 
     parser.add_argument("--gpus", default="1", type=str, help="Which gpus to use.")
@@ -230,4 +230,5 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    # print(args)
     train(args)

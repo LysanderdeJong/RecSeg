@@ -18,6 +18,7 @@ import h5py
 import pickle
 import nibabel as nib
 import json
+from pathlib import Path
 
 
 class skmtea(Dataset):
@@ -734,6 +735,335 @@ class TecFideraDataModule(pl.LightningDataModule):
             default=True,
             type=bool,
             help="Whether to cache dataset metadata in a pkl file",
+        )
+
+        # data loader arguments
+        parser.add_argument(
+            "--batch_size", default=1, type=int, help="Data loader batch size"
+        )
+        parser.add_argument(
+            "--num_workers",
+            default=4,
+            type=int,
+            help="Number of workers to use in data loader",
+        )
+
+        return parent_parser
+
+
+from mridc.collections.reconstruction.data.mri_data import FastMRISliceDataset
+from mridc.collections.reconstruction.parts.transforms import MRIDataTransforms
+from mridc.collections.reconstruction.data.subsample import create_mask_for_mask_type
+
+
+class MRISliceDataset(FastMRISliceDataset):
+    def __init__(
+        self,
+        root,
+        challenge: str = "multicoil",
+        transform=None,
+        sense_root=None,
+        use_dataset_cache: bool = False,
+        sample_rate: float = 1.0,
+        volume_sample_rate: float = None,
+        dataset_cache_file: str = "dataset_cache.yaml",
+        num_cols: int = None,
+        mask_root: str = None,
+        mask_type: str = "gaussian2d",
+        shift_mask: bool = False,
+        accelerations=[4, 6, 8, 10],
+        center_fractions=[0.7, 0.7, 0.7, 0.7],
+        scale: float = 0.02,
+        normalize_inputs: bool = True,
+        crop_size=None,
+        crop_before_masking: bool = True,
+        kspace_zero_filling_size=None,
+        fft_type: str = "orthogonal",
+        use_seed: bool = True,
+    ):
+
+        if mask_type is not None and mask_type != "None":
+            mask_func = (
+                [
+                    create_mask_for_mask_type(mask_type, [cf] * 2, [acc] * 2)
+                    for acc, cf in zip(accelerations, center_fractions)
+                ]
+                if len(accelerations) > 2
+                else [
+                    create_mask_for_mask_type(
+                        mask_type, center_fractions, accelerations
+                    )
+                ]
+            )
+
+        else:
+            mask_func = None  # type: ignore
+            scale = 0.02
+
+        transform = (
+            MRIDataTransforms(
+                mask_func=mask_func,
+                shift_mask=shift_mask,
+                mask_center_scale=scale,
+                normalize_inputs=normalize_inputs,
+                crop_size=crop_size,
+                crop_before_masking=crop_before_masking,
+                kspace_zero_filling_size=kspace_zero_filling_size,
+                fft_type=fft_type,
+                use_seed=use_seed,
+            )
+            if transform is None
+            else transform
+        )
+
+        sample_rate = 1 if sample_rate is None else sample_rate
+
+        super().__init__(
+            root=root,
+            challenge=challenge,
+            transform=transform,
+            sense_root=sense_root,
+            use_dataset_cache=use_dataset_cache,
+            sample_rate=sample_rate,
+            volume_sample_rate=volume_sample_rate,
+            dataset_cache_file=dataset_cache_file,
+            num_cols=num_cols,
+            mask_root=mask_root,
+        )
+
+    def __getitem__(self, i: int):
+        fname, dataslice, metadata = self.examples[i]
+        with h5py.File(fname, "r") as hf:
+            kspace = hf["kspace"][dataslice].astype(np.complex64)
+
+            if "sensitivity_map" in hf:
+                sensitivity_map = hf["sensitivity_map"][dataslice].astype(np.complex64)
+            elif self.sense_root is not None and self.sense_root != "None":
+                with h5py.File(
+                    Path(self.sense_root)
+                    / Path(str(fname).split("/")[-2])
+                    / fname.name,
+                    "r",
+                ) as sf:
+                    sensitivity_map = (
+                        sf["sensitivity_map"][dataslice]
+                        if "sensitivity_map" in sf
+                        or "sensitivity_map" in next(iter(sf.keys()))
+                        else sf["sense"][dataslice]
+                    )
+                    sensitivity_map = sensitivity_map.squeeze().astype(np.complex64)
+            else:
+                sensitivity_map = np.array([])
+
+            if "mask" in hf:
+                mask = np.asarray(hf["mask"])
+
+                if mask.ndim == 3:
+                    mask = mask[dataslice]
+
+            elif self.mask_root is not None and self.mask_root != "None":
+                mask_path = Path(self.mask_root) / Path(
+                    str(fname.name).split(".")[0] + ".npy"
+                )
+                mask = np.load(str(mask_path))
+            else:
+                mask = None
+
+            eta = (
+                hf["eta"][dataslice].astype(np.complex64)
+                if "eta" in hf
+                else np.array([])
+            )
+
+            if "reconstruction_sense" in hf:
+                self.recons_key = "reconstruction_sense"
+
+            target = hf[self.recons_key][dataslice] if self.recons_key in hf else None
+
+            attrs = dict(hf.attrs)
+            attrs.update(metadata)
+
+        if sensitivity_map.shape != kspace.shape:
+            sensitivity_map = np.transpose(sensitivity_map, (2, 0, 1))
+
+        return (
+            (kspace, sensitivity_map, mask, eta, target, attrs, fname.name, dataslice,)
+            if self.transform is None
+            else self.transform(
+                kspace,
+                sensitivity_map,
+                mask,
+                eta,
+                target,
+                attrs,
+                fname.name,
+                dataslice,
+            )
+        )
+
+
+class TecFideraMRIDataModule(pl.LightningDataModule):
+    def __init__(
+        self, data_root, **kwargs,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+
+    def _make_dataset(self):
+        return MRISliceDataset(
+            root=self.hparams.data_root,
+            challenge=self.hparams.challenge,
+            sample_rate=self.hparams.sample_rate,
+            mask_type=self.hparams.mask_type,
+            shift_mask=self.hparams.shift_mask,
+            accelerations=self.hparams.accelerations,
+            center_fractions=self.hparams.center_fractions,
+            scale=self.hparams.mask_center_scale,
+            normalize_inputs=self.hparams.normalize_inputs,
+            crop_size=self.hparams.crop_size,
+            crop_before_masking=self.hparams.crop_before_masking,
+            kspace_zero_filling_size=self.hparams.kspace_zero_filling_size,
+            fft_type=self.hparams.fft_type_data,
+            use_seed=self.hparams.use_seed,
+        )
+
+    def setup(self, stage=None):
+        if stage == "fit" or stage is None:
+            dataset = self._make_dataset()
+            self.train, self.val = random_split(
+                dataset,
+                [
+                    int(self.hparams.train_fraction * len(dataset)),
+                    len(dataset) - (int(self.hparams.train_fraction * len(dataset))),
+                ],
+            )
+            self.val, self.test = random_split(
+                self.val, [len(self.val) // 2, len(self.val) - len(self.val) // 2]
+            )
+
+        if stage == "test" or stage is None:
+            pass
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train,
+            batch_size=self.hparams.batch_size,
+            shuffle=True,
+            num_workers=self.hparams.num_workers,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            num_workers=self.hparams.num_workers,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            num_workers=self.hparams.num_workers,
+        )
+
+    @staticmethod
+    def add_data_specific_args(parent_parser):
+        parser = parent_parser.add_argument_group("Dataset")
+
+        # dataset arguments
+        parser.add_argument(
+            "--data_root",
+            default="/data/projects/tecfidera/data/h5_recon_dataset/",
+            type=str,
+            help="Path to the data root.",
+        )
+        parser.add_argument(
+            "--challenge",
+            default="multicoil",
+            type=str,
+            help="Challange category taken from FastMRI",
+        )
+        parser.add_argument(
+            "--sample_rate",
+            default=1.0,
+            type=float,
+            help="Fraction of the data to use.",
+        )
+        parser.add_argument(
+            "--mask_type",
+            default="gaussian2d",
+            type=str,
+            help="The string representation of the mask type.",
+        )
+        parser.add_argument(
+            "--shift_mask",
+            action="store_true",
+            default=False,
+            help="The string representation of the mask type.",
+        )
+        parser.add_argument(
+            "--accelerations",
+            nargs="+",
+            type=int,
+            default=[4, 6, 8, 10],
+            help="Mask acceleration factors",
+        )
+        parser.add_argument(
+            "--center_fractions",
+            nargs="+",
+            type=float,
+            default=[0.7, 0.7, 0.7, 0.7],
+            help="Center fraction of the mask",
+        )
+        parser.add_argument(
+            "--mask_center_scale", type=float, default=0.02, help="Mask center scale",
+        )
+        parser.add_argument(
+            "--normalize_inputs",
+            action="store_false",
+            default=True,
+            help="Whether or not to normaliz the input to the network",
+        )
+        parser.add_argument(
+            "--crop_size",
+            nargs="+",
+            type=int,
+            default=None,
+            help="Size to crop kspace to",
+        )
+        parser.add_argument(
+            "--crop_before_masking",
+            action="store_false",
+            default=True,
+            help="Whether or not the cropping happens before or after the masking",
+        )
+        parser.add_argument(
+            "--kspace_zero_filling_size",
+            nargs="+",
+            type=int,
+            default=None,
+            help="Size to kspace to be filled",
+        )
+        parser.add_argument(
+            "--fft_type_data",
+            default="backward",
+            type=str,
+            help="The type of fft normilization to use.",
+        )
+        parser.add_argument(
+            "--use_seed",
+            action="store_false",
+            default=True,
+            help="Whether to use the seed",
+        )
+
+        parser.add_argument(
+            "--train_fraction",
+            default=0.85,
+            type=float,
+            help="Fraction of th data used for training.",
         )
 
         # data loader arguments

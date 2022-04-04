@@ -1,7 +1,9 @@
+from collections import defaultdict
 import torch
 from torch import nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
+from torchmetrics import functional as FM
 from argparse import ArgumentParser
 from einops import rearrange
 
@@ -11,6 +13,7 @@ from model.vnet import Vnet
 from model.deeplab import DeepLab
 from model.unet3d import Unet3d
 from model.attunet import AttUnet
+from model.cirim import CIRIM
 from losses import DiceLoss, ContourLoss
 
 
@@ -113,7 +116,7 @@ class UnetModule(pl.LightningModule):
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=5, cooldown=0
+                optim, mode="min", factor=0.1, patience=7, cooldown=1
             ),
             "monitor": "val_loss",
         }
@@ -240,7 +243,7 @@ class LamdaUnetModule(pl.LightningModule):
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=5, cooldown=0
+                optim, mode="min", factor=0.1, patience=7, cooldown=1
             ),
             "monitor": "val_loss",
         }
@@ -384,7 +387,7 @@ class VnetModule(pl.LightningModule):
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=5, cooldown=0
+                optim, mode="min", factor=0.1, patience=7, cooldown=1
             ),
             "monitor": "val_loss",
         }
@@ -637,7 +640,7 @@ class Unet3dModule(pl.LightningModule):
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=5, cooldown=0
+                optim, mode="min", factor=0.1, patience=7, cooldown=1
             ),
             "monitor": "val_loss",
         }
@@ -682,9 +685,7 @@ class Unet3dModule(pl.LightningModule):
         return parent_parser
 
 
-from mridc.collections.reconstruction.models.cirim import CIRIM
-
-
+# Needs to be redone.
 class CIRIMModule(pl.LightningModule):
     def __init__(
         self,
@@ -700,14 +701,13 @@ class CIRIMModule(pl.LightningModule):
         depth: int = 2,
         time_steps: int = 8,
         conv_dim: int = 2,
-        loss_fn: str = "l1",
+        loss_fn: str = F.l1_loss,
         num_cascades: int = 1,
         no_dc: bool = False,
         keep_eta: bool = False,
         use_sens_net: bool = False,
         sens_chans: int = 8,
         sens_pools: int = 4,
-        sens_normalize: bool = True,
         sens_mask_type: str = "2D",
         fft_type: str = "orthogonal",
         output_type: str = "SENSE",
@@ -734,63 +734,48 @@ class CIRIMModule(pl.LightningModule):
             depth=self.hparams.depth,
             time_steps=self.hparams.time_steps,
             conv_dim=self.hparams.conv_dim,
-            loss_fn=self.hparams.loss_fn,
             num_cascades=self.hparams.num_cascades,
             no_dc=self.hparams.no_dc,
             keep_eta=self.hparams.keep_eta,
             use_sens_net=self.hparams.use_sens_net,
             sens_chans=self.hparams.sens_chans,
             sens_pools=self.hparams.sens_pools,
-            sens_normalize=self.hparams.sens_normalize,
             sens_mask_type=self.hparams.sens_mask_type,
             fft_type=self.hparams.fft_type,
             output_type=self.hparams.output_type,
         )
-        self.example_input_array = torch.rand(1, 32, 640, 320, 2, device=self.device)
+        self.example_input_array = [
+            torch.rand(1, 32, 320, 320, 2),  # kspace
+            torch.rand(1, 32, 320, 320, 2),  # sesitivity maps
+            torch.rand(1, 1, 320, 320, 1),  # mask
+            torch.rand(1, 320, 320, 2),  # initial prediction
+            torch.rand(1, 320, 320, 2),  # target
+        ]
 
-    def forward(self, x):
-        with torch.no_grad():
-            x = F.group_norm(x, num_groups=1)
-        x = self.model(x)
-        return x
+    def forward(
+        self, y, sensitivity_maps, mask, init_pred, target,
+    ):
+        return self.model(y, sensitivity_maps, mask, init_pred, target)
 
     def step(self, batch, batch_indx=None):
-        (
-            masked_kspace,
-            sensitivity_map,
-            mask,
-            eta,
-            target,
-            _,
-            _,
-            acc,
-            max_value,
-            _,
-        ) = batch
+        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
+        y, mask, _ = self.model.process_input(y, mask)
+        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
 
-        if isinstance(masked_kspace, list):
-            r = np.random.randint(len(masked_kspace))
-            y = masked_kspace[r]
-            m = mask[r]
-            acceleration = str(acc[r].item())
-        else:
-            y = masked_kspace
-            m = mask
-            acceleration = str(acc.item())
+        loss = self.model.calculate_loss(preds, target, _loss_fn=self.hparams.loss_fn)
 
-        loss = self(
-            y,
-            sensitivity_map,
-            m,
-            eta=eta,
-            target=target,
-            max_value=max_value,
-            accumulate_loss=True,
-        )
+        if torch.any(torch.isnan(preds[-1][-1])):
+            print(preds[-1][-1])
+            raise ValueError
 
-        loss_dict = {}
-        loss_dict["loss"] = loss
-        return loss_dict, None
+        output = torch.abs(preds[-1][-1])
+        output = output / output.amax()
+        target = torch.abs(target) / torch.abs(target).amax()
+
+        loss_dict = {"loss": loss}
+        loss_dict["psnr"] = FM.psnr(output.unsqueeze(0), target.unsqueeze(0))
+        loss_dict["ssim"] = FM.ssim(output.unsqueeze(0), target.unsqueeze(0))
+        return loss_dict, preds
 
     def training_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
@@ -805,14 +790,38 @@ class CIRIMModule(pl.LightningModule):
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
+        fname = batch[-3]
+        slice_num = batch[-2]
         loss_dict, output = self.step(batch, batch_idx)
+        if isinstance(output, list):
+            output = output[-1]
+        if isinstance(output, list):
+            output = output[-1]
         for metric, value in zip(loss_dict.keys(), loss_dict.values()):
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict
+        return loss_dict, (fname, slice_num, output.detach().cpu().numpy())
+
+    # def test_epoch_end(self, outputs):
+    #     reconstructions = defaultdict(list)
+    #     for fname, slice_num, output in outputs[1]:
+    #         reconstructions[fname].append((slice_num, output))
+
+    #     for fname in reconstructions:
+    #         reconstructions[fname] = np.stack([out for _, out in sorted(reconstructions[fname])])  # type: ignore
+
+    #     out_dir = Path(os.path.join(self.logger.log_dir, "reconstructions"))
+    #     out_dir.mkdir(exist_ok=True, parents=True)
+    #     for fname, recons in reconstructions.items():
+    #         with h5py.File(out_dir / fname, "w") as hf:
+    #             hf.create_dataset("reconstruction", data=recons)
 
     def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
+        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
+        y, mask, _ = self.model.process_input(y, mask)
+        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
+        output = torch.abs(preds[-1][-1])
+        output = output / output.max()
+        return output
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -822,7 +831,7 @@ class CIRIMModule(pl.LightningModule):
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=5, cooldown=0
+                optim, mode="min", factor=0.5, patience=4, cooldown=1
             ),
             "monitor": "val_loss",
         }
@@ -910,9 +919,6 @@ class CIRIMModule(pl.LightningModule):
             help="Dimension of the convolutional layers",
         )
         parser.add_argument(
-            "--loss_fn", type=str, default="l1", help="Loss function to use"
-        )
-        parser.add_argument(
             "--no_dc",
             action="store_false",
             default=True,
@@ -940,11 +946,6 @@ class CIRIMModule(pl.LightningModule):
             help="Number of channels for the sensitivity net",
         )
         parser.add_argument(
-            "--sens_normalize",
-            action="store_true",
-            help="Normalize the sensitivity net",
-        )
-        parser.add_argument(
             "--sens_mask_type",
             choices=["1D", "2D"],
             default="2D",
@@ -957,7 +958,7 @@ class CIRIMModule(pl.LightningModule):
             help="Type of output to use",
         )
         parser.add_argument(
-            "--fft_type", type=str, default="orthogonal", help="Type of FFT to use"
+            "--fft_type", type=str, default="backward", help="Type of FFT to use"
         )
 
         # training params (opt)
@@ -1073,7 +1074,7 @@ class AttUnetModule(pl.LightningModule):
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=5, cooldown=0
+                optim, mode="min", factor=0.1, patience=7, cooldown=1
             ),
             "monitor": "val_loss",
         }
