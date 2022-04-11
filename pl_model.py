@@ -76,10 +76,12 @@ class UnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = {}
-        loss_dict["cross_entropy"] = self.cross_entropy(
-            output, torch.argmax(target, dim=1).long()
-        )
+        loss_dict = {
+            "cross_entropy": self.cross_entropy(
+                output, torch.argmax(target, dim=1).long()
+            )
+        }
+
         dice_loss, dice_score = self.dice_loss(output, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
@@ -203,10 +205,12 @@ class LamdaUnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = {}
-        loss_dict["cross_entropy"] = self.cross_entropy(
-            output, torch.argmax(target, dim=1).long()
-        )
+        loss_dict = {
+            "cross_entropy": self.cross_entropy(
+                output, torch.argmax(target, dim=1).long()
+            )
+        }
+
         dice_loss, dice_score = self.dice_loss(output, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
@@ -347,10 +351,12 @@ class VnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = {}
-        loss_dict["cross_entropy"] = self.cross_entropy(
-            output, torch.argmax(target, dim=1).long()
-        )
+        loss_dict = {
+            "cross_entropy": self.cross_entropy(
+                output, torch.argmax(target, dim=1).long()
+            )
+        }
+
         dice_loss, dice_score = self.dice_loss(output, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
@@ -465,10 +471,12 @@ class DeepLabModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = {}
-        loss_dict["cross_entropy"] = self.cross_entropy(
-            output, torch.argmax(target, dim=1).long()
-        )
+        loss_dict = {
+            "cross_entropy": self.cross_entropy(
+                output, torch.argmax(target, dim=1).long()
+            )
+        }
+
         dice_loss, dice_score = self.dice_loss(output, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
@@ -600,10 +608,12 @@ class Unet3dModule(pl.LightningModule):
         if len(target.shape) == 5:
             target = rearrange(target, "b t c h w -> (b t) c h w")
 
-        loss_dict = {}
-        loss_dict["cross_entropy"] = self.cross_entropy(
-            output, torch.argmax(target, dim=1).long()
-        )
+        loss_dict = {
+            "cross_entropy": self.cross_entropy(
+                output, torch.argmax(target, dim=1).long()
+            )
+        }
+
         dice_loss, dice_score = self.dice_loss(output, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
@@ -772,8 +782,11 @@ class CIRIMModule(pl.LightningModule):
         output = output / output.amax()
         target = torch.abs(target) / torch.abs(target).amax()
 
-        loss_dict = {"loss": loss}
-        loss_dict["psnr"] = FM.psnr(output.unsqueeze(0), target.unsqueeze(0))
+        loss_dict = {
+            "loss": loss,
+            "psnr": FM.psnr(output.unsqueeze(0), target.unsqueeze(0)),
+        }
+
         loss_dict["ssim"] = FM.ssim(output.unsqueeze(0), target.unsqueeze(0))
         return loss_dict, preds
 
@@ -1034,10 +1047,12 @@ class AttUnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = {}
-        loss_dict["cross_entropy"] = self.cross_entropy(
-            output, torch.argmax(target, dim=1).long()
-        )
+        loss_dict = {
+            "cross_entropy": self.cross_entropy(
+                output, torch.argmax(target, dim=1).long()
+            )
+        }
+
         dice_loss, dice_score = self.dice_loss(output, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()

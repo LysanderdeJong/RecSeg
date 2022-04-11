@@ -266,6 +266,75 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
         self.predictions = []
 
 
+class LogIntermediateReconstruction(pl.Callback):
+    def __init__(self, num_examples=5) -> None:
+        super().__init__()
+        self.num_examples = num_examples
+
+        self.prediction = []
+        self.captions = []
+        self.metrics = []
+
+    @rank_zero_only
+    def on_validation_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx,
+    ) -> None:
+        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
+        if (int(slice_num) > 70 and int(slice_num) < 120) or (
+            len(self.predictions) > self.num_examples
+        ):
+            preds = outputs[0]
+            metric = outputs[1]
+            if isinstance(preds, list):
+                preds = [i for j in preds for i in j]
+                if len(preds) > 1:
+                    pred_stack = torch.stack(preds, dim=0)
+                    pred_stack = torch.abs(pred_stack) / torch.amax(
+                        torch.abs(pred_stack), dim=0
+                    )
+                    preds = list(pred_stack.detach().cpu())
+                else:
+                    preds = preds[-1]
+
+            self.predictions.append(preds)
+            self.captions.append(f"{fname[0][:-3]}_slice_{int(slice_num)}")
+            self.metrics.append(
+                (
+                    f"psnr: {metric['psnr'].mean():.3f}",
+                    f"ssim: {metric['ssim'].mean():.3f}",
+                )
+            )
+
+    @rank_zero_only
+    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+        num_examples = min(self.num_examples, len(self.predictions))
+
+        image_list = []
+        captions = []
+        for i, (pred, cap, metric) in enumerate(
+            zip(self.predictions, self.captions, self.metrics,)
+        ):
+            image_grid = torchvision.utils.make_grid(pred)
+            cap_str = f"{cap}: intermediate results. {metric[0]}, {metric[1]}."
+
+            image_list.append(image_grid)
+            captions.append(cap_str)
+
+            if i >= num_examples:
+                break
+
+        if image_list:
+            trainer.logger.log_image(
+                key="Intermediate results", images=image_list, caption=captions
+            )
+            del image_list
+            del captions
+
+        self.predictions = []
+        self.captions = []
+        self.metrics = []
+
+
 class LogReconstructionTECFIDERA(pl.Callback):
     def __init__(self, num_examples=5):
         super().__init__()
@@ -284,12 +353,14 @@ class LogReconstructionTECFIDERA(pl.Callback):
     ):
 
         y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
-        if int(slice_num) > 60 and int(slice_num) < 160:
+        if (int(slice_num) > 70 and int(slice_num) < 120) or (
+            len(self.predictions) > self.num_examples
+        ):
             preds = outputs[0]
             metric = outputs[1]
             # print(metric)
             if isinstance(preds, list):
-                preds = [i[-1] for i in preds]
+                preds = [i for j in preds for i in j]
                 if len(preds) > 1:
                     pred_stack = torch.stack(preds, dim=0)
                     pred_stack = torch.abs(pred_stack) / torch.amax(
@@ -302,11 +373,10 @@ class LogReconstructionTECFIDERA(pl.Callback):
                     #     dim=0,
                     # )
                     uncertainty = torch.std(pred_stack, dim=0).detach().cpu()
-                    preds = preds[-1]
                 else:
-                    preds = preds[-1]
                     uncertainty = None
 
+                preds = preds[-1]
             else:
                 uncertainty = None
 

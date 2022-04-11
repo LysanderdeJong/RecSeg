@@ -18,6 +18,7 @@ from pytorch_lightning.plugins import DDPPlugin
 from mridc.collections.common.parts.ptl_overrides import MRIDCNativeMixedPrecisionPlugin
 
 from callbacks import (
+    LogIntermediateReconstruction,
     LogReconstructionTECFIDERA,
     PrintCallback,
     LogCallback,
@@ -64,6 +65,7 @@ def train(args):
             callbacks.append(LogSegmentationMasksTECFIDERA())
         elif args.dataset == "tecfideramri":
             callbacks.append(LogReconstructionTECFIDERA())
+            callbacks.append(LogIntermediateReconstruction())
     else:
         callbacks.append(LogCallback())
     if not args.progress_bar:
