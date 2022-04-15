@@ -27,6 +27,7 @@ from callbacks import (
     LogSegmentationMasksSKMTEA,
     LogSegmentationMasksDWI,
     LogSegmentationMasksTECFIDERA,
+    LogSegmentationMasksRECSEGTECFIDERA,
 )
 from utils import parse_known_args, get_dataset, get_model
 
@@ -66,6 +67,8 @@ def train(args):
         elif args.dataset == "tecfideramri":
             callbacks.append(LogReconstructionTECFIDERA())
             callbacks.append(LogIntermediateReconstruction())
+        if args.model == "recseg" and args.dataset == "tecfideramri":
+            callbacks.append(LogSegmentationMasksRECSEGTECFIDERA())
     else:
         callbacks.append(LogCallback())
     if not args.progress_bar:

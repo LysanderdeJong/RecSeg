@@ -98,8 +98,7 @@ class LambdaLayer(nn.Module):
         else:
             Y = Yc + Yp
 
-        out = rearrange(Y, "b h v (hh ww) -> b (h v) hh ww", hh=height, ww=width)
-        return out
+        return rearrange(Y, "b h v (hh ww) -> b (h v) hh ww", hh=height, ww=width)
 
 
 class LambdaBlock(nn.Module):

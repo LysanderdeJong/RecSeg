@@ -4,769 +4,41 @@ from torch import nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
 from torchmetrics import functional as FM
-from argparse import ArgumentParser
 from einops import rearrange
 
-from model.unet import Unet
-from model.lambda_layer import LambdaBlock
-from model.vnet import Vnet
-from model.deeplab import DeepLab
-from model.unet3d import Unet3d
-from model.attunet import AttUnet
-from model.cirim import CIRIM
-from losses import DiceLoss, ContourLoss
+from losses import DiceLoss
+
+from model.cirim import CIRIMModule
+from model.unet import LamdaUnetModule
 
 
-class UnetModule(pl.LightningModule):
+class RecSegModule(pl.LightningModule):
     def __init__(
-        self,
-        in_chans=1,
-        out_chans=1,
-        chans=32,
-        num_pool_layers=4,
-        drop_prob=0.1,
-        lr=0.001,
-        lr_step_size=40,
-        lr_gamma=0.0,
-        weight_decay=0.0,
-        **kwargs,
+        self, **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters()
 
-        self.in_chans = in_chans
-        self.out_chans = out_chans
-        self.chans = chans
-        self.num_pool_layers = num_pool_layers
-        self.drop_prob = drop_prob
-        self.lr = lr
-        self.weight_decay = weight_decay
+        self.cirim = CIRIMModule(**kwargs)
+        self.lambdaunet = LamdaUnetModule(**kwargs)
 
-        self.model = Unet(
-            in_chans=self.hparams.in_chans,
-            out_chans=self.hparams.out_chans,
-            chans=self.hparams.chans,
-            num_pool_layers=self.hparams.num_pool_layers,
-            drop_prob=self.hparams.drop_prob,
-        )
-        self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 256, 256, device=self.device
-        )
-
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
-
-    def forward(self, x):
-        with torch.no_grad():
-            x = F.group_norm(x, num_groups=1)
-        x = self.model(x)
-        return x
-
-    def step(self, batch, batch_indx=None):
-        input, target = batch
-
-        if len(input.shape) == 5:
-            input = rearrange(input, "b t c h w -> (b t) c h w")
-        if len(target.shape) == 5:
-            target = rearrange(target, "b t c h w -> (b t) c h w")
-
-        output = self(input)
-
-        if torch.any(torch.isnan(output)):
-            print(output)
-            raise ValueError
-
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
-            )
-        }
-
-        dice_loss, dice_score = self.dice_loss(output, target)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
-
-    def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"train_{metric}", value.mean().detach())
-        return loss_dict["loss"]
-
-    def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
-        return output, loss_dict
-
-    def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict
-
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay,
-        )
-        scheduler = {
-            "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=7, cooldown=1
-            ),
-            "monitor": "val_loss",
-        }
-
-        return [optim], [scheduler]
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("UnetModel")
-
-        # network params
-        parser.add_argument(
-            "--in_chans", default=2, type=int, help="Number of U-Net input channels"
-        )
-        parser.add_argument(
-            "--out_chans", default=7, type=int, help="Number of U-Net output chanenls"
-        )
-        parser.add_argument(
-            "--chans", default=32, type=int, help="Number of top-level U-Net filters."
-        )
-        parser.add_argument(
-            "--num_pool_layers",
-            default=4,
-            type=int,
-            help="Number of U-Net pooling layers.",
-        )
-        parser.add_argument(
-            "--drop_prob", default=0.1, type=float, help="U-Net dropout probability"
-        )
-
-        # training params (opt)
-        parser.add_argument(
-            "--lr", default=1e-3, type=float, help="Optimizer learning rate"
-        )
-        parser.add_argument(
-            "--weight_decay",
-            default=0.0,
-            type=float,
-            help="Strength of weight decay regularization",
-        )
-
-        return parent_parser
-
-
-class LamdaUnetModule(pl.LightningModule):
-    def __init__(self, in_chans=1, out_chans=1, chans=32, **kwargs):
-        super().__init__()
-        self.save_hyperparameters()
-
-        self.model = Unet(
-            in_chans=self.hparams.in_chans,
-            out_chans=self.hparams.out_chans,
-            chans=self.hparams.chans,
-            num_pool_layers=self.hparams.num_pool_layers,
-            drop_prob=self.hparams.drop_prob,
-            block=LambdaBlock,
-            temporal_kernel=self.hparams.tr,
-            num_slices=self.hparams.num_slices,
-        )
-        self.example_input_array = torch.rand(
-            3, self.hparams.in_chans, 256, 256, device=self.device
-        )
-
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
-
-    def forward(self, x):
-        with torch.no_grad():
-            x = F.group_norm(x, num_groups=1)
-        x = self.model(x)
-        return x
-
-    def step(self, batch, batch_indx=None):
-        input, target = batch
-
-        if len(input.shape) == 5:
-            input = rearrange(input, "b t c h w -> (b t) c h w")
-        if len(target.shape) == 5:
-            target = rearrange(target, "b t c h w -> (b t) c h w")
-
-        output = self(input)
-
-        if torch.any(torch.isnan(output)):
-            print(output)
-            raise ValueError
-
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
-            )
-        }
-
-        dice_loss, dice_score = self.dice_loss(output, target)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
-
-    def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"train_{metric}", value.mean().detach())
-        return loss_dict["loss"]
-
-    def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
-        return output, loss_dict
-
-    def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict
-
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay,
-        )
-        scheduler = {
-            "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=7, cooldown=1
-            ),
-            "monitor": "val_loss",
-        }
-
-        return [optim], [scheduler]
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("LambdaUnetModel")
-
-        # network params
-        parser.add_argument(
-            "--in_chans", default=2, type=int, help="Number of U-Net input channels"
-        )
-        parser.add_argument(
-            "--out_chans", default=7, type=int, help="Number of U-Net output chanenls"
-        )
-        parser.add_argument(
-            "--chans", default=32, type=int, help="Number of top-level U-Net filters."
-        )
-        parser.add_argument(
-            "--num_pool_layers",
-            default=4,
-            type=int,
-            help="Number of U-Net pooling layers.",
-        )
-        parser.add_argument(
-            "--drop_prob", default=0.1, type=float, help="U-Net dropout probability"
-        )
-
-        parser.add_argument("--tr", default=3, type=int, help="Size of temporal kernel")
-        parser.add_argument(
-            "--num_slices",
-            default=3,
-            type=int,
-            help="Numer of slices to process simultaneously.",
-        )
-
-        # training params (opt)
-        parser.add_argument(
-            "--lr", default=1e-3, type=float, help="Optimizer learning rate"
-        )
-        parser.add_argument(
-            "--weight_decay",
-            default=0.0,
-            type=float,
-            help="Strength of weight decay regularization",
-        )
-
-        return parent_parser
-
-
-class VnetModule(pl.LightningModule):
-    def __init__(
-        self,
-        in_chans=1,
-        out_chans=1,
-        drop_prob=0.1,
-        lr=0.001,
-        weight_decay=0.0,
-        **kwargs,
-    ):
-        super().__init__()
-        self.save_hyperparameters()
-
-        self.in_chans = in_chans
-        self.out_chans = out_chans
-        self.drop_prob = drop_prob
-        self.lr = lr
-        self.weight_decay = weight_decay
-
-        self.model = Vnet(
-            in_channels=self.hparams.in_chans,
-            out_channels=self.hparams.out_chans,
-            dropout_prob=self.hparams.drop_prob,
-        )
-        self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 256, 256, device=self.device
-        )
-
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
-
-    def forward(self, x):
-        with torch.no_grad():
-            x = F.group_norm(x, num_groups=1)
-        x = self.model(x)
-        return x
-
-    def step(self, batch, batch_indx=None):
-        input, target = batch
-
-        if len(input.shape) == 5:
-            input = rearrange(input, "b t c h w -> (b t) c h w")
-        if len(target.shape) == 5:
-            target = rearrange(target, "b t c h w -> (b t) c h w")
-
-        output = self(input)
-
-        if torch.any(torch.isnan(output)):
-            print(output)
-            raise ValueError
-
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
-            )
-        }
-
-        dice_loss, dice_score = self.dice_loss(output, target)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
-
-    def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"train_{metric}", value.mean().detach())
-        return loss_dict["loss"]
-
-    def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
-        return output, loss_dict
-
-    def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict
-
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay,
-        )
-        scheduler = {
-            "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=7, cooldown=1
-            ),
-            "monitor": "val_loss",
-        }
-
-        return [optim], [scheduler]
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("UnetModel")
-
-        # network params
-        parser.add_argument(
-            "--in_chans", default=2, type=int, help="Number of V-Net input channels"
-        )
-        parser.add_argument(
-            "--out_chans", default=7, type=int, help="Number of V-Net output chanenls"
-        )
-        parser.add_argument(
-            "--drop_prob", default=0.5, type=float, help="U-Net dropout probability"
-        )
-
-        # training params (opt)
-        parser.add_argument(
-            "--lr", default=1e-3, type=float, help="Optimizer learning rate"
-        )
-        parser.add_argument(
-            "--weight_decay",
-            default=0.0,
-            type=float,
-            help="Strength of weight decay regularization",
-        )
-
-        return parent_parser
-
-
-class DeepLabModule(pl.LightningModule):
-    def __init__(
-        self, in_chans=1, out_chans=1, lr=0.001, weight_decay=0.0, **kwargs,
-    ):
-        super().__init__()
-        self.save_hyperparameters()
-
-        self.in_chans = in_chans
-        self.out_chans = out_chans
-        self.lr = lr
-        self.weight_decay = weight_decay
-
-        self.model = DeepLab(
-            num_input_chans=self.hparams.in_chans, num_classes=self.hparams.out_chans
-        )
-        self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 256, 256, device=self.device
-        )
-
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
-
-    def forward(self, x):
-        with torch.no_grad():
-            x = F.group_norm(x, num_groups=1)
-        x = self.model(x)
-        return x
-
-    def step(self, batch, batch_indx=None):
-        input, target = batch
-
-        if len(input.shape) == 5:
-            input = rearrange(input, "b t c h w -> (b t) c h w")
-        if len(target.shape) == 5:
-            target = rearrange(target, "b t c h w -> (b t) c h w")
-
-        output = self(input)["out"]
-
-        if torch.any(torch.isnan(output)):
-            print(output)
-            raise ValueError
-
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
-            )
-        }
-
-        dice_loss, dice_score = self.dice_loss(output, target)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
-
-    def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"train_{metric}", value.mean().detach())
-        return loss_dict["loss"]
-
-    def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
-        return output, loss_dict
-
-    def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict
-
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay,
-        )
-        scheduler = {
-            "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=5, cooldown=0
-            ),
-            "monitor": "val_loss",
-        }
-
-        return [optim], [scheduler]
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("UnetModel")
-
-        # network params
-        parser.add_argument(
-            "--in_chans", default=2, type=int, help="Number of input channels"
-        )
-        parser.add_argument(
-            "--out_chans", default=7, type=int, help="Number of output chanenls"
-        )
-
-        # training params (opt)
-        parser.add_argument(
-            "--lr", default=1e-3, type=float, help="Optimizer learning rate"
-        )
-        parser.add_argument(
-            "--weight_decay",
-            default=0.0,
-            type=float,
-            help="Strength of weight decay regularization",
-        )
-
-        return parent_parser
-
-
-class Unet3dModule(pl.LightningModule):
-    def __init__(
-        self,
-        in_chans=1,
-        out_chans=1,
-        chans=32,
-        num_pool_layers=4,
-        drop_prob=0.1,
-        lr=0.001,
-        weight_decay=0.0,
-        **kwargs,
-    ):
-        super().__init__()
-        self.save_hyperparameters()
-
-        self.in_chans = in_chans
-        self.out_chans = out_chans
-        self.chans = chans
-        self.num_pool_layers = num_pool_layers
-        self.drop_prob = drop_prob
-        self.lr = lr
-        self.weight_decay = weight_decay
-
-        self.model = Unet3d(
-            in_chans=self.hparams.in_chans,
-            out_chans=self.hparams.out_chans,
-            chans=self.hparams.chans,
-            num_pool_layers=self.hparams.num_pool_layers,
-            drop_prob=self.hparams.drop_prob,
-        )
-        self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 3, 256, 256, device=self.device
-        )
-
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
-
-    def forward(self, x):
-        with torch.no_grad():
-            x = F.group_norm(x, num_groups=1)
-        x = self.model(x)
-        return x
-
-    def step(self, batch, batch_indx=None):
-        input, target = batch
-
-        if len(input.shape) == 5:
-            input = rearrange(input, "b t c h w -> b c t h w")
-        if len(target.shape) == 5:
-            target = rearrange(target, "b t c h w -> b c t h w")
-
-        output = self(input)
-
-        if torch.any(torch.isnan(output)):
-            print(output)
-            raise ValueError
-
-        if len(output.shape) == 5:
-            output = rearrange(output, "b t c h w -> (b t) c h w")
-        if len(target.shape) == 5:
-            target = rearrange(target, "b t c h w -> (b t) c h w")
-
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
-            )
-        }
-
-        dice_loss, dice_score = self.dice_loss(output, target)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
-
-    def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"train_{metric}", value.mean().detach())
-        return loss_dict["loss"]
-
-    def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
-        return output, loss_dict
-
-    def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict
-
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay,
-        )
-        scheduler = {
-            "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=7, cooldown=1
-            ),
-            "monitor": "val_loss",
-        }
-
-        return [optim], [scheduler]
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("Unet3dModel")
-
-        # network params
-        parser.add_argument(
-            "--in_chans", default=2, type=int, help="Number of U-Net input channels"
-        )
-        parser.add_argument(
-            "--out_chans", default=7, type=int, help="Number of U-Net output chanenls"
-        )
-        parser.add_argument(
-            "--chans", default=32, type=int, help="Number of top-level U-Net filters."
-        )
-        parser.add_argument(
-            "--num_pool_layers",
-            default=4,
-            type=int,
-            help="Number of U-Net pooling layers.",
-        )
-        parser.add_argument(
-            "--drop_prob", default=0.1, type=float, help="U-Net dropout probability"
-        )
-
-        # training params (opt)
-        parser.add_argument(
-            "--lr", default=1e-3, type=float, help="Optimizer learning rate"
-        )
-        parser.add_argument(
-            "--weight_decay",
-            default=0.0,
-            type=float,
-            help="Strength of weight decay regularization",
-        )
-
-        return parent_parser
-
-
-# Needs to be redone.
-class CIRIMModule(pl.LightningModule):
-    def __init__(
-        self,
-        recurrent_layer: str = "IndRNN",
-        conv_filters=None,
-        conv_kernels=None,
-        conv_dilations=None,
-        conv_bias=None,
-        recurrent_filters=None,
-        recurrent_kernels=None,
-        recurrent_dilations=None,
-        recurrent_bias=None,
-        depth: int = 2,
-        time_steps: int = 8,
-        conv_dim: int = 2,
-        loss_fn: str = F.l1_loss,
-        num_cascades: int = 1,
-        no_dc: bool = False,
-        keep_eta: bool = False,
-        use_sens_net: bool = False,
-        sens_chans: int = 8,
-        sens_pools: int = 4,
-        sens_mask_type: str = "2D",
-        fft_type: str = "orthogonal",
-        output_type: str = "SENSE",
-        lr=0.001,
-        weight_decay=0.0,
-        **kwargs,
-    ):
-        super().__init__()
-        self.save_hyperparameters()
-
-        self.lr = lr
-        self.weight_decay = weight_decay
-
-        self.model = CIRIM(
-            recurrent_layer=self.hparams.recurrent_layer,
-            conv_filters=self.hparams.conv_filters,
-            conv_kernels=self.hparams.conv_kernels,
-            conv_dilations=self.hparams.conv_dilations,
-            conv_bias=self.hparams.conv_bias,
-            recurrent_filters=self.hparams.recurrent_filters,
-            recurrent_kernels=self.hparams.recurrent_kernels,
-            recurrent_dilations=self.hparams.recurrent_dilations,
-            recurrent_bias=self.hparams.recurrent_bias,
-            depth=self.hparams.depth,
-            time_steps=self.hparams.time_steps,
-            conv_dim=self.hparams.conv_dim,
-            num_cascades=self.hparams.num_cascades,
-            no_dc=self.hparams.no_dc,
-            keep_eta=self.hparams.keep_eta,
-            use_sens_net=self.hparams.use_sens_net,
-            sens_chans=self.hparams.sens_chans,
-            sens_pools=self.hparams.sens_pools,
-            sens_mask_type=self.hparams.sens_mask_type,
-            fft_type=self.hparams.fft_type,
-            output_type=self.hparams.output_type,
-        )
         self.example_input_array = [
-            torch.rand(1, 32, 320, 320, 2),  # kspace
-            torch.rand(1, 32, 320, 320, 2),  # sesitivity maps
-            torch.rand(1, 1, 320, 320, 1),  # mask
-            torch.rand(1, 320, 320, 2),  # initial prediction
-            torch.rand(1, 320, 320, 2),  # target
+            torch.rand(3, 32, 320, 320, 2),  # kspace
+            torch.rand(3, 32, 320, 320, 2),  # sesitivity maps
+            torch.rand(3, 1, 320, 320, 1),  # mask
+            torch.rand(3, 320, 320, 2),  # initial prediction
+            torch.rand(3, 320, 320),  # target
         ]
 
-    def forward(
-        self, y, sensitivity_maps, mask, init_pred, target,
-    ):
+        self.dice_loss = DiceLoss()
+        self.cross_entropy = nn.CrossEntropyLoss()
 
-        return self.model(y, sensitivity_maps, mask, init_pred, target)
+    def forward(self, y, sensitivity_maps, mask, init_pred, target):
+        recons = self.cirim.forward(y, sensitivity_maps, mask, init_pred, target)
+        x = rearrange(torch.view_as_real(recons[-1][-1]), "b h w c -> b c h w")
+        x = F.group_norm(x, num_groups=1)
+        seg = self.lambdaunet.forward(x)
+        return recons, seg
 
     def step(self, batch, batch_indx=None):
         (
@@ -780,94 +52,82 @@ class CIRIMModule(pl.LightningModule):
             acc,
             segmentation,
         ) = batch
-        y, mask, _ = self.model.process_input(y, mask)
+        y, mask, _ = self.cirim.model.process_input(y, mask)
 
-        y = self.fold(y)
-        sensitivity_maps = self.fold(sensitivity_maps)
-        mask = self.fold(mask)
-        target = self.fold(target)
+        y = self.cirim.fold(y)
+        sensitivity_maps = self.cirim.fold(sensitivity_maps)
+        mask = self.cirim.fold(mask)
+        target = self.cirim.fold(target)
+        segmentation = self.cirim.fold(segmentation)
 
-        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
-        loss = self.model.calculate_loss(preds, target, _loss_fn=self.hparams.loss_fn)
+        preds_recon, pred_seg = self.forward(
+            y, sensitivity_maps, mask, init_pred, target
+        )
 
-        # if torch.any(torch.isnan(preds[-1][-1])):
-        #     print(preds[-1][-1])
+        # if torch.any(torch.isnan(preds[-1][-1])) or torch.any(torch.isnan(pred_seg)):
         #     raise ValueError
 
-        output = torch.abs(preds[-1][-1])
+        loss = self.cirim.model.calculate_loss(preds_recon, target, _loss_fn=F.l1_loss)
+
+        output = torch.abs(preds_recon[-1][-1])
         output = output / output.amax((-1, -2), True)
         target = torch.abs(target) / torch.abs(target).amax((-1, -2), True)
 
         loss_dict = {
-            "loss": loss,
+            "l1": loss,
             "psnr": FM.psnr(output.unsqueeze(-3), target.unsqueeze(-3)),
             "ssim": FM.ssim(output.unsqueeze(-3), target.unsqueeze(-3)),
+            "cross_entropy": self.cross_entropy(
+                pred_seg, torch.argmax(segmentation, dim=1).long()
+            ),
         }
-        return loss_dict, preds
+        dice_loss, dice_score = self.dice_loss(pred_seg, segmentation)
+        loss_dict["dice_loss"] = dice_loss.mean()
+        loss_dict["dice_score"] = dice_score.detach()
+        loss_dict["loss"] = (
+            loss_dict["cross_entropy"] + loss_dict["dice_loss"] + loss_dict["l1"]
+        )
+        return loss_dict, preds_recon, pred_seg
 
     def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, output_recon, output_seg = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, output_recon, output_seg = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
-        return output, loss_dict
+        return loss_dict, output_recon, output_seg
 
     def test_step(self, batch, batch_idx):
-        fname = batch[-3]
-        slice_num = batch[-2]
-        loss_dict, output = self.step(batch, batch_idx)
-        if isinstance(output, list):
-            output = output[-1]
-        if isinstance(output, list):
-            output = output[-1]
+        loss_dict, output_recon, output_seg = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict, (fname, slice_num, output.detach().cpu().numpy())
-
-    # def test_epoch_end(self, outputs):
-    #     reconstructions = defaultdict(list)
-    #     for fname, slice_num, output in outputs[1]:
-    #         reconstructions[fname].append((slice_num, output))
-
-    #     for fname in reconstructions:
-    #         reconstructions[fname] = np.stack([out for _, out in sorted(reconstructions[fname])])  # type: ignore
-
-    #     out_dir = Path(os.path.join(self.logger.log_dir, "reconstructions"))
-    #     out_dir.mkdir(exist_ok=True, parents=True)
-    #     for fname, recons in reconstructions.items():
-    #         with h5py.File(out_dir / fname, "w") as hf:
-    #             hf.create_dataset("reconstruction", data=recons)
+        return loss_dict
 
     def predict_step(self, batch, batch_idx, dataloader_idx):
-        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
-        y, mask, _ = self.model.process_input(y, mask)
-        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
-        return preds[-1][-1]
-
-    def fold(self, tensor):
-        shape = list(tensor.shape[1:])
-        shape[0] = -1
-        return tensor.view(shape)
-
-    def unfold(self, tensor):
-        shape = list(1, tensor.shape)
-        shape[1] = -1
-        return tensor.view(shape)
+        input, _ = batch
+        return self(input)
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.parameters()),
+            [
+                {"params": filter(lambda p: p.requires_grad, self.cirim.parameters()),},
+                {
+                    "params": filter(
+                        lambda p: p.requires_grad, self.lambdaunet.parameters()
+                    ),
+                    "lr": self.hparams.lr * 10,
+                },
+            ],
             lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay,
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.5, patience=4, cooldown=1
+                optim, mode="min", factor=0.1, patience=7, cooldown=1
             ),
             "monitor": "val_loss",
         }
@@ -876,7 +136,7 @@ class CIRIMModule(pl.LightningModule):
 
     @staticmethod
     def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("CIRIMModel")
+        parser = parent_parser.add_argument_group("RecSegModel")
 
         # network params
         parser.add_argument(
@@ -997,138 +257,12 @@ class CIRIMModule(pl.LightningModule):
             "--fft_type", type=str, default="backward", help="Type of FFT to use"
         )
 
-        # training params (opt)
-        parser.add_argument(
-            "--lr", default=1e-3, type=float, help="Optimizer learning rate"
-        )
-        parser.add_argument(
-            "--weight_decay",
-            default=0.0,
-            type=float,
-            help="Strength of weight decay regularization",
-        )
-
-        return parent_parser
-
-
-class AttUnetModule(pl.LightningModule):
-    def __init__(
-        self,
-        in_chans=1,
-        out_chans=1,
-        chans=32,
-        num_pool_layers=4,
-        drop_prob=0.1,
-        lr=0.001,
-        lr_step_size=40,
-        lr_gamma=0.0,
-        weight_decay=0.0,
-        **kwargs,
-    ):
-        super().__init__()
-        self.save_hyperparameters()
-
-        self.in_chans = in_chans
-        self.out_chans = out_chans
-        self.chans = chans
-        self.num_pool_layers = num_pool_layers
-        self.drop_prob = drop_prob
-        self.lr = lr
-        self.weight_decay = weight_decay
-
-        self.model = AttUnet(
-            in_chans=self.hparams.in_chans,
-            out_chans=self.hparams.out_chans,
-            chans=self.hparams.chans,
-            num_pool_layers=self.hparams.num_pool_layers,
-            drop_prob=self.hparams.drop_prob,
-        )
-        self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 256, 256, device=self.device
-        )
-
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
-
-    def forward(self, x):
-        with torch.no_grad():
-            x = F.group_norm(x, num_groups=1)
-        x = self.model(x)
-        return x
-
-    def step(self, batch, batch_indx=None):
-        input, target = batch
-
-        if len(input.shape) == 5:
-            input = rearrange(input, "b t c h w -> (b t) c h w")
-        if len(target.shape) == 5:
-            target = rearrange(target, "b t c h w -> (b t) c h w")
-
-        output = self(input)
-
-        if torch.any(torch.isnan(output)):
-            print(output)
-            raise ValueError
-
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
-            )
-        }
-
-        dice_loss, dice_score = self.dice_loss(output, target)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
-
-    def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"train_{metric}", value.mean().detach())
-        return loss_dict["loss"]
-
-    def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
-        return output, loss_dict
-
-    def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in loss_dict.items():
-            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict
-
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
-
-    def configure_optimizers(self):
-        optim = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay,
-        )
-        scheduler = {
-            "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=7, cooldown=1
-            ),
-            "monitor": "val_loss",
-        }
-
-        return [optim], [scheduler]
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("UnetModel")
-
         # network params
         parser.add_argument(
             "--in_chans", default=2, type=int, help="Number of U-Net input channels"
         )
         parser.add_argument(
-            "--out_chans", default=7, type=int, help="Number of U-Net output chanenls"
+            "--out_chans", default=2, type=int, help="Number of U-Net output chanenls"
         )
         parser.add_argument(
             "--chans", default=32, type=int, help="Number of top-level U-Net filters."
@@ -1141,6 +275,14 @@ class AttUnetModule(pl.LightningModule):
         )
         parser.add_argument(
             "--drop_prob", default=0.1, type=float, help="U-Net dropout probability"
+        )
+
+        parser.add_argument("--tr", default=3, type=int, help="Size of temporal kernel")
+        parser.add_argument(
+            "--num_slices",
+            default=3,
+            type=int,
+            help="Numer of slices to process simultaneously.",
         )
 
         # training params (opt)

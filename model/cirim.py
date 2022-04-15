@@ -3,6 +3,8 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+import pytorch_lightning as pl
+from torchmetrics import functional as FM
 
 from mridc.collections.reconstruction.models.rim.rim_block import RIMBlock
 from mridc.collections.reconstruction.models.base import BaseSensitivityModel
@@ -184,3 +186,319 @@ class CIRIM(nn.Module):
         return (
             cascade_stack_loss.mean((0, -2, -1)) * loss_weights.reshape(-1, 1)
         ).mean()
+
+
+class CIRIMModule(pl.LightningModule):
+    def __init__(
+        self,
+        recurrent_layer: str = "IndRNN",
+        conv_filters=None,
+        conv_kernels=None,
+        conv_dilations=None,
+        conv_bias=None,
+        recurrent_filters=None,
+        recurrent_kernels=None,
+        recurrent_dilations=None,
+        recurrent_bias=None,
+        depth: int = 2,
+        time_steps: int = 8,
+        conv_dim: int = 2,
+        loss_fn: str = F.l1_loss,
+        num_cascades: int = 1,
+        no_dc: bool = False,
+        keep_eta: bool = False,
+        use_sens_net: bool = False,
+        sens_chans: int = 8,
+        sens_pools: int = 4,
+        sens_mask_type: str = "2D",
+        fft_type: str = "orthogonal",
+        output_type: str = "SENSE",
+        lr=0.001,
+        weight_decay=0.0,
+        **kwargs,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+
+        self.lr = lr
+        self.weight_decay = weight_decay
+
+        self.model = CIRIM(
+            recurrent_layer=self.hparams.recurrent_layer,
+            conv_filters=self.hparams.conv_filters,
+            conv_kernels=self.hparams.conv_kernels,
+            conv_dilations=self.hparams.conv_dilations,
+            conv_bias=self.hparams.conv_bias,
+            recurrent_filters=self.hparams.recurrent_filters,
+            recurrent_kernels=self.hparams.recurrent_kernels,
+            recurrent_dilations=self.hparams.recurrent_dilations,
+            recurrent_bias=self.hparams.recurrent_bias,
+            depth=self.hparams.depth,
+            time_steps=self.hparams.time_steps,
+            conv_dim=self.hparams.conv_dim,
+            num_cascades=self.hparams.num_cascades,
+            no_dc=self.hparams.no_dc,
+            keep_eta=self.hparams.keep_eta,
+            use_sens_net=self.hparams.use_sens_net,
+            sens_chans=self.hparams.sens_chans,
+            sens_pools=self.hparams.sens_pools,
+            sens_mask_type=self.hparams.sens_mask_type,
+            fft_type=self.hparams.fft_type,
+            output_type=self.hparams.output_type,
+        )
+        self.example_input_array = [
+            torch.rand(1, 32, 320, 320, 2),  # kspace
+            torch.rand(1, 32, 320, 320, 2),  # sesitivity maps
+            torch.rand(1, 1, 320, 320, 1),  # mask
+            torch.rand(1, 320, 320, 2),  # initial prediction
+            torch.rand(1, 320, 320, 2),  # target
+        ]
+
+    def forward(
+        self, y, sensitivity_maps, mask, init_pred, target,
+    ):
+
+        return self.model(y, sensitivity_maps, mask, init_pred, target)
+
+    def step(self, batch, batch_indx=None):
+        (
+            y,
+            sensitivity_maps,
+            mask,
+            init_pred,
+            target,
+            fname,
+            slice_num,
+            acc,
+            segmentation,
+        ) = batch
+        y, mask, _ = self.model.process_input(y, mask)
+
+        y = self.fold(y)
+        sensitivity_maps = self.fold(sensitivity_maps)
+        mask = self.fold(mask)
+        target = self.fold(target)
+
+        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
+        loss = self.model.calculate_loss(preds, target, _loss_fn=self.hparams.loss_fn)
+
+        # if torch.any(torch.isnan(preds[-1][-1])):
+        #     print(preds[-1][-1])
+        #     raise ValueError
+
+        output = torch.abs(preds[-1][-1])
+        output = output / output.amax((-1, -2), True)
+        target = torch.abs(target) / torch.abs(target).amax((-1, -2), True)
+
+        loss_dict = {
+            "loss": loss,
+            "l1": loss,
+            "psnr": FM.psnr(output.unsqueeze(-3), target.unsqueeze(-3)),
+            "ssim": FM.ssim(output.unsqueeze(-3), target.unsqueeze(-3)),
+        }
+        return loss_dict, preds
+
+    def training_step(self, batch, batch_idx):
+        loss_dict, output = self.step(batch, batch_idx)
+        for metric, value in loss_dict.items():
+            self.log(f"train_{metric}", value.mean().detach())
+        return loss_dict["loss"]
+
+    def validation_step(self, batch, batch_idx):
+        loss_dict, output = self.step(batch, batch_idx)
+        for metric, value in loss_dict.items():
+            self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
+        return loss_dict, output
+
+    def test_step(self, batch, batch_idx):
+        fname = batch[-3]
+        slice_num = batch[-2]
+        loss_dict, output = self.step(batch, batch_idx)
+        if isinstance(output, list):
+            output = output[-1]
+        if isinstance(output, list):
+            output = output[-1]
+        for metric, value in loss_dict.items():
+            self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
+        return loss_dict, (fname, slice_num, output.detach().cpu().numpy())
+
+    # def test_epoch_end(self, outputs):
+    #     reconstructions = defaultdict(list)
+    #     for fname, slice_num, output in outputs[1]:
+    #         reconstructions[fname].append((slice_num, output))
+
+    #     for fname in reconstructions:
+    #         reconstructions[fname] = np.stack([out for _, out in sorted(reconstructions[fname])])  # type: ignore
+
+    #     out_dir = Path(os.path.join(self.logger.log_dir, "reconstructions"))
+    #     out_dir.mkdir(exist_ok=True, parents=True)
+    #     for fname, recons in reconstructions.items():
+    #         with h5py.File(out_dir / fname, "w") as hf:
+    #             hf.create_dataset("reconstruction", data=recons)
+
+    def predict_step(self, batch, batch_idx, dataloader_idx):
+        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
+        y, mask, _ = self.model.process_input(y, mask)
+        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
+        return preds[-1][-1]
+
+    def fold(self, tensor):
+        shape = list(tensor.shape[1:])
+        shape[0] = -1
+        return tensor.view(shape)
+
+    def unfold(self, tensor):
+        shape = list(1, tensor.shape)
+        shape[1] = -1
+        return tensor.view(shape)
+
+    def configure_optimizers(self):
+        optim = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, self.parameters()),
+            lr=self.hparams.lr,
+            weight_decay=self.hparams.weight_decay,
+        )
+        scheduler = {
+            "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optim, mode="min", factor=0.5, patience=4, cooldown=1
+            ),
+            "monitor": "val_loss",
+        }
+
+        return [optim], [scheduler]
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = parent_parser.add_argument_group("CIRIMModel")
+
+        # network params
+        parser.add_argument(
+            "--num_cascades",
+            type=int,
+            default=1,
+            help="Number of cascades for the model",
+        )
+        parser.add_argument(
+            "--time_steps", type=int, default=8, help="Number of RIM steps"
+        )
+        parser.add_argument(
+            "--recurrent_layer", type=str, default="IndRNN", help="Recurrent layer type"
+        )
+        parser.add_argument(
+            "--conv_filters",
+            nargs="+",
+            default=[64, 64, 2],
+            type=int,
+            help="Number of filters the convolutional layers of for the model",
+        )
+        parser.add_argument(
+            "--conv_kernels",
+            nargs="+",
+            default=[5, 3, 3],
+            type=int,
+            help="Kernel size for the convolutional layers of the model",
+        )
+        parser.add_argument(
+            "--conv_dilations",
+            nargs="+",
+            type=int,
+            default=[1, 2, 1],
+            help="Dilations for the convolutional layers of the model",
+        )
+        parser.add_argument(
+            "--conv_bias",
+            nargs="+",
+            type=bool,
+            default=[True, True, False],
+            help="Bias for the convolutional layers of the model",
+        )
+        parser.add_argument(
+            "--recurrent_filters",
+            nargs="+",
+            type=int,
+            default=[64, 64, 0],
+            help="Number of filters the recurrent layers of for the model",
+        )
+        parser.add_argument(
+            "--recurrent_kernels",
+            nargs="+",
+            type=int,
+            default=[1, 1, 0],
+            help="Kernel size for the recurrent layers of the model",
+        )
+        parser.add_argument(
+            "--recurrent_dilations",
+            nargs="+",
+            type=int,
+            default=[1, 1, 0],
+            help="Dilations for the recurrent layers of the model",
+        )
+        parser.add_argument(
+            "--recurrent_bias",
+            nargs="+",
+            type=bool,
+            default=[True, True, False],
+            help="Bias for the recurrent layers of the model",
+        )
+        parser.add_argument("--depth", type=int, default=2, help="Depth of the model")
+        parser.add_argument(
+            "--conv_dim",
+            type=int,
+            default=2,
+            help="Dimension of the convolutional layers",
+        )
+        parser.add_argument(
+            "--no_dc",
+            action="store_false",
+            default=True,
+            help="Do not use DC component",
+        )
+        parser.add_argument(
+            "--keep_eta", action="store_false", default=True, help="Keep eta constant"
+        )
+        parser.add_argument(
+            "--use_sens_net",
+            action="store_true",
+            default=False,
+            help="Use sensitivity net",
+        )
+        parser.add_argument(
+            "--sens_pools",
+            type=int,
+            default=4,
+            help="Number of pools for the sensitivity net",
+        )
+        parser.add_argument(
+            "--sens_chans",
+            type=int,
+            default=8,
+            help="Number of channels for the sensitivity net",
+        )
+        parser.add_argument(
+            "--sens_mask_type",
+            choices=["1D", "2D"],
+            default="2D",
+            help="Type of mask to use for the sensitivity net",
+        )
+        parser.add_argument(
+            "--output_type",
+            choices=["SENSE", "RSS"],
+            default="SENSE",
+            help="Type of output to use",
+        )
+        parser.add_argument(
+            "--fft_type", type=str, default="backward", help="Type of FFT to use"
+        )
+
+        # training params (opt)
+        parser.add_argument(
+            "--lr", default=1e-3, type=float, help="Optimizer learning rate"
+        )
+        parser.add_argument(
+            "--weight_decay",
+            default=0.0,
+            type=float,
+            help="Strength of weight decay regularization",
+        )
+
+        return parent_parser

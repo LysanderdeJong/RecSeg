@@ -62,13 +62,13 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
             )
             self.num_classes = target.shape[1]
             target = torch.argmax(target, dim=1)
-            prediction = torch.nn.functional.softmax(outputs[0], dim=1)
+            prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
             self.inputs = input.detach()
             self.targets = target.detach()
             self.predictions = prediction.detach()
-            self.metrics = outputs[1].detach()
+            self.metrics = outputs[0].detach()
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -142,13 +142,13 @@ class LogSegmentationMasksDWI(pl.Callback):
                 target = rearrange(target, "b t c h w -> (b t) c h w")
             self.num_classes = target.shape[1]
             target = torch.argmax(target, dim=1)
-            prediction = torch.nn.functional.softmax(outputs[0], dim=1)
+            prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
             self.inputs = input.detach()
             self.targets = target.detach()
             self.predictions = prediction.detach()
-            self.metrics = outputs[1].detach()
+            self.metrics = outputs[0].detach()
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -208,24 +208,32 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
     ):
         if batch_idx == 1:
-            input, target = batch
+            if len(batch) > 2:
+                input = outputs[1][-1][-1]
+                target = batch
+            else:
+                input, target = batch
             if len(input.shape) == 5:
                 input = rearrange(input, "b t c h w -> (b t) c h w")
                 target = rearrange(target, "b t c h w -> (b t) c h w")
-            input = torch.abs(
-                torch.view_as_complex(
-                    rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()
+
+            if torch.is_complex(input):
+                input = torch.abs(input)
+            else:
+                input = torch.abs(
+                    torch.view_as_complex(
+                        rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()
+                    )
                 )
-            )
             self.num_classes = target.shape[1]
             target = torch.argmax(target, dim=1)
-            prediction = torch.nn.functional.softmax(outputs[0], dim=1)
+            prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
             self.inputs = input.detach()
             self.targets = target.detach()
             self.predictions = prediction.detach()
-            self.metrics = outputs[1].detach()
+            self.metrics = outputs[0].detach()
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -266,6 +274,113 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
         self.predictions = []
 
 
+class LogSegmentationMasksRECSEGTECFIDERA(pl.Callback):
+    def __init__(self, num_examples=5):
+        super().__init__()
+        self.num_examples = num_examples
+        self.class_labels = {
+            2: {0: "Background", 1: "Lesion"},
+        }
+
+        self.inputs = []
+        self.targets = []
+        self.predictions = []
+        self.metrics = []
+        self.captions = []
+
+    @rank_zero_only
+    def on_validation_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
+    ):
+        (
+            y,
+            sensitivity_maps,
+            mask,
+            init_pred,
+            target,
+            fname,
+            slice_num,
+            _,
+            segmentation,
+        ) = batch
+        if (int(slice_num) > 70 and int(slice_num) < 120) or (
+            len(self.predictions) > self.num_examples
+        ):
+            input = outputs[1][-1][-1]
+
+            if torch.is_complex(input):
+                input = torch.abs(input)
+            else:
+                input = torch.abs(
+                    torch.view_as_complex(
+                        rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()
+                    )
+                )
+
+            self.num_classes = segmentation.shape[-3]
+            target = torch.argmax(segmentation.squeeze(), dim=-3)
+            prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
+            prediction = torch.argmax(prediction, dim=1)
+
+            self.inputs.append(input[0].detach())
+            self.targets.append(target[0].detach())
+            self.predictions.append(prediction[0].detach())
+            self.captions.append(f"{fname[0][:-3]}_slice_{int(slice_num)}")
+            self.metrics.append(f"DSC: {outputs[0]['dice_score'].detach().mean():.3f}")
+
+    @rank_zero_only
+    def on_validation_end(self, trainer, pl_module):
+        num_examples = min(self.num_examples, len(self.predictions))
+
+        image_list = []
+        masks = []
+        captions = []
+        for i, (input, pred, target, cap, metric) in enumerate(
+            zip(
+                self.inputs,
+                self.predictions,
+                self.targets,
+                self.captions,
+                self.metrics,
+            )
+        ):
+            image = input
+            image = image / image.max() * 255
+            image = image.cpu().numpy().astype(np.uint8)
+
+            target = target.cpu().numpy().astype(np.uint8)
+
+            prediction = pred.cpu().numpy().astype(np.uint8)
+
+            image_list.append(image)
+            mask_dict = {
+                "predictions": {
+                    "mask_data": prediction,
+                    "class_labels": self.class_labels[self.num_classes],
+                },
+                "groud_truth": {
+                    "mask_data": target,
+                    "class_labels": self.class_labels[self.num_classes],
+                },
+            }
+            masks.append(mask_dict)
+            captions.append(f"{cap}: {metric}")
+
+            if i >= num_examples:
+                break
+
+        if image_list:
+            trainer.logger.log_image(
+                key="Segmentations", images=image_list, masks=masks, caption=captions
+            )
+            del image_list
+            del masks
+            del captions
+        self.inputs = []
+        self.targets = []
+        self.predictions = []
+
+
 class LogIntermediateReconstruction(pl.Callback):
     def __init__(self, num_examples=5) -> None:
         super().__init__()
@@ -293,8 +408,8 @@ class LogIntermediateReconstruction(pl.Callback):
         if (int(slice_num) > 70 and int(slice_num) < 120) or (
             len(self.predictions) > self.num_examples
         ):
-            preds = outputs[0]
-            metric = outputs[1]
+            preds = outputs[1]
+            metric = outputs[0]
             if isinstance(preds, list):
                 preds = [i[0].unsqueeze(0) for j in preds for i in j]
                 if len(preds) > 1:
@@ -376,8 +491,8 @@ class LogReconstructionTECFIDERA(pl.Callback):
         if (int(slice_num) > 70 and int(slice_num) < 120) or (
             len(self.predictions) > self.num_examples
         ):
-            preds = outputs[0]
-            metric = outputs[1]
+            preds = outputs[1]
+            metric = outputs[0]
             # print(metric)
             if isinstance(preds, list):
                 preds = [i[0].unsqueeze(0) for j in preds for i in j]
@@ -452,7 +567,7 @@ class LogReconstructionTECFIDERA(pl.Callback):
 
         if image_list:
             trainer.logger.log_image(
-                key="Predictions", images=image_list, caption=captions
+                key="Reconstructions", images=image_list, caption=captions
             )
             del image_list
             del captions
@@ -524,7 +639,7 @@ class InferenceTimeCallback(pl.Callback):
             torch.cuda.Event(enable_timing=True),
             torch.cuda.Event(enable_timing=True),
         )
-        repetitions = 300
+        repetitions = 200
         timings = torch.zeros(repetitions)
 
         for _ in range(25):

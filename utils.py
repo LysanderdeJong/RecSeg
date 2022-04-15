@@ -8,15 +8,14 @@ from dataloader import (
     TecFideraDataModule,
     TecFideraMRIDataModule,
 )
-from pl_model import (
-    UnetModule,
-    LamdaUnetModule,
-    VnetModule,
-    DeepLabModule,
-    Unet3dModule,
-    AttUnetModule,
-    CIRIMModule,
-)
+
+from model.unet import UnetModule, LamdaUnetModule
+from model.vnet import VnetModule
+from model.deeplab import DeepLabModule
+from model.unet3d import Unet3dModule
+from model.attunet import AttUnetModule
+from model.cirim import CIRIMModule
+from pl_model import RecSegModule
 
 
 def segmentation_volume_to_img(seg):
@@ -51,6 +50,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             parser = AttUnetModule.add_model_specific_args(parser)
         elif args.model == "cirim":
             parser = CIRIMModule.add_model_specific_args(parser)
+        elif args.model == "recseg":
+            parser = RecSegModule.add_model_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -69,6 +70,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             return AttUnetModule(**kwargs)
         elif model == "cirim":
             return CIRIMModule(**kwargs)
+        elif model == "recseg":
+            return RecSegModule(**kwargs)
         else:
             raise NotImplementedError
     else:
