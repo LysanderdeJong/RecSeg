@@ -144,7 +144,7 @@ class CIRIM(nn.Module):
         if not self.no_dc or do_coil_combination:
             pred = ifft2c(pred, fft_type=self.fft_type)
             pred = coil_combination(
-                pred, sensitivity_maps, method=self.output_type, dim=1
+                pred, sensitivity_maps, method=self.output_type, dim=-4
             )
         pred = torch.view_as_complex(pred)
         _, pred = center_crop_to_smallest(target, pred)
@@ -162,23 +162,25 @@ class CIRIM(nn.Module):
         return y, mask, r
 
     def calculate_loss(self, eta, target, _loss_fn=F.l1_loss):
-        target = torch.abs(target / torch.max(torch.abs(target)))
+        target = torch.abs(target / torch.abs(target).amax((-1, -2), True))
         if not self.accumulate_estimates:
-            return _loss_fn(torch.abs(eta / torch.max(torch.abs(eta))), target)
-        cascade_loss = []
+            return _loss_fn(
+                torch.abs(eta / torch.abs(eta).amax((-1, -2), True)), target
+            )
+
+        loss_weights = torch.logspace(-1, 0, steps=len(eta[-1]), device=target.device)
+
+        cascade_list = []
         for cascade_eta in eta:
-            time_step_loss = [
-                _loss_fn(
-                    torch.abs(time_step_eta / torch.max(torch.abs(time_step_eta))),
-                    target,
-                )
-                for time_step_eta in cascade_eta
-            ]
-            time_step_loss = torch.stack(time_step_loss)
-            loss_weights = torch.logspace(
-                -1, 0, steps=len(time_step_loss), device=time_step_loss.device
-            )
-            cascade_loss.append(
-                sum(time_step_loss * loss_weights) / len(time_step_loss)
-            )
-        return sum(cascade_loss) / len(cascade_loss)
+            time_step_stack = torch.stack(cascade_eta)
+            cascade_list.append(time_step_stack)
+        cascade_stack = torch.stack(cascade_list)
+        cascade_stack = torch.abs(
+            cascade_stack / torch.abs(cascade_stack).amax((-1, -2), True)
+        )
+        cascade_stack_loss = _loss_fn(
+            cascade_stack, target.expand_as(cascade_stack), reduction="none"
+        )
+        return (
+            cascade_stack_loss.mean((0, -2, -1)) * loss_weights.reshape(-1, 1)
+        ).mean()

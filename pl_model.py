@@ -90,19 +90,19 @@ class UnetModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
@@ -219,19 +219,19 @@ class LamdaUnetModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
@@ -365,19 +365,19 @@ class VnetModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
@@ -485,19 +485,19 @@ class DeepLabModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
@@ -622,19 +622,19 @@ class Unet3dModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
@@ -765,40 +765,55 @@ class CIRIMModule(pl.LightningModule):
     def forward(
         self, y, sensitivity_maps, mask, init_pred, target,
     ):
+
         return self.model(y, sensitivity_maps, mask, init_pred, target)
 
     def step(self, batch, batch_indx=None):
-        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
+        (
+            y,
+            sensitivity_maps,
+            mask,
+            init_pred,
+            target,
+            fname,
+            slice_num,
+            acc,
+            segmentation,
+        ) = batch
         y, mask, _ = self.model.process_input(y, mask)
-        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
 
+        y = self.fold(y)
+        sensitivity_maps = self.fold(sensitivity_maps)
+        mask = self.fold(mask)
+        target = self.fold(target)
+
+        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
         loss = self.model.calculate_loss(preds, target, _loss_fn=self.hparams.loss_fn)
 
-        if torch.any(torch.isnan(preds[-1][-1])):
-            print(preds[-1][-1])
-            raise ValueError
+        # if torch.any(torch.isnan(preds[-1][-1])):
+        #     print(preds[-1][-1])
+        #     raise ValueError
 
         output = torch.abs(preds[-1][-1])
-        output = output / output.amax()
-        target = torch.abs(target) / torch.abs(target).amax()
+        output = output / output.amax((-1, -2), True)
+        target = torch.abs(target) / torch.abs(target).amax((-1, -2), True)
 
         loss_dict = {
             "loss": loss,
-            "psnr": FM.psnr(output.unsqueeze(0), target.unsqueeze(0)),
+            "psnr": FM.psnr(output.unsqueeze(-3), target.unsqueeze(-3)),
+            "ssim": FM.ssim(output.unsqueeze(-3), target.unsqueeze(-3)),
         }
-
-        loss_dict["ssim"] = FM.ssim(output.unsqueeze(0), target.unsqueeze(0))
         return loss_dict, preds
 
     def training_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
@@ -810,7 +825,7 @@ class CIRIMModule(pl.LightningModule):
             output = output[-1]
         if isinstance(output, list):
             output = output[-1]
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict, (fname, slice_num, output.detach().cpu().numpy())
 
@@ -832,9 +847,17 @@ class CIRIMModule(pl.LightningModule):
         y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
         y, mask, _ = self.model.process_input(y, mask)
         preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
-        output = torch.abs(preds[-1][-1])
-        output = output / output.max()
-        return output
+        return preds[-1][-1]
+
+    def fold(self, tensor):
+        shape = list(tensor.shape[1:])
+        shape[0] = -1
+        return tensor.view(shape)
+
+    def unfold(self, tensor):
+        shape = list(1, tensor.shape)
+        shape[1] = -1
+        return tensor.view(shape)
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -1061,19 +1084,19 @@ class AttUnetModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return output, loss_dict
 
     def test_step(self, batch, batch_idx):
         loss_dict, output = self.step(batch, batch_idx)
-        for metric, value in zip(loss_dict.keys(), loss_dict.values()):
+        for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 

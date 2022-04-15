@@ -421,6 +421,8 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
             kspace_zero_filling_size=self.hparams.kspace_zero_filling_size,
             fft_type=self.hparams.fft_type_data,
             use_seed=self.hparams.use_seed,
+            segmentation=self.hparams.segmentation,
+            seq_len=self.hparams.seq_len,
         )
 
     def setup(self, stage=None):
@@ -550,6 +552,17 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
             action="store_false",
             default=True,
             help="Whether to use the seed",
+        )
+
+        parser.add_argument(
+            "--segmentation",
+            action="store_true",
+            default=False,
+            help="Whether to use the seed",
+        )
+
+        parser.add_argument(
+            "--seq_len", default=1, type=int, help="Number of slices to read at once.",
         )
 
         parser.add_argument(

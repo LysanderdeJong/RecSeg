@@ -438,13 +438,94 @@ class MRISliceDataset(FastMRISliceDataset):
             mask_root=mask_root,
         )
 
+        if challenge not in ("singlecoil", "multicoil"):
+            raise ValueError('challenge should be either "singlecoil" or "multicoil"')
+
+        if sample_rate is not None and volume_sample_rate is not None:
+            raise ValueError(
+                "either set sample_rate (sample by slices) or volume_sample_rate (sample by volumes) but not both"
+            )
+
+        self.sense_root = sense_root
+        self.mask_root = mask_root
+
+        self.dataset_cache_file = Path(dataset_cache_file)
+
+        self.transform = transform
+        self.recons_key = (
+            "reconstruction_esc" if challenge == "singlecoil" else "reconstruction_rss"
+        )
+        self.examples = []
+
+        # set default sampling mode if none given
+        if sample_rate is None:
+            sample_rate = 1.0
+        if volume_sample_rate is None:
+            volume_sample_rate = 1.0
+
+        # load dataset cache if we have and user wants to use it
+        if self.dataset_cache_file.exists() and use_dataset_cache:
+            with open(self.dataset_cache_file, "rb") as f:
+                dataset_cache = yaml.safe_load(f)
+        else:
+            dataset_cache = {}
+
+        # check if our dataset is in the cache
+        # if there, use that metadata, if not, then regenerate the metadata
+        if dataset_cache.get(root) is None or not use_dataset_cache:
+            files = list(Path(root).iterdir())
+            for fname in sorted(files):
+                metadata, num_slices = self._retrieve_metadata(fname)
+                num_slices -= self.seq_len + 1
+                self.examples += [
+                    (fname, slice_ind, metadata) for slice_ind in range(num_slices)
+                ]
+
+            if dataset_cache.get(root) is None and use_dataset_cache:
+                dataset_cache[root] = self.examples
+                logging.info(f"Saving dataset cache to {self.dataset_cache_file}.")
+                with open(self.dataset_cache_file, "wb") as f:  # type: ignore
+                    yaml.dump(dataset_cache, f)  # type: ignore
+        else:
+            logging.info(f"Using dataset cache from {self.dataset_cache_file}.")
+            self.examples = dataset_cache[root]
+
+        # subsample if desired
+        if sample_rate < 1.0:  # sample by slice
+            random.shuffle(self.examples)
+            num_examples = round(len(self.examples) * sample_rate)
+            self.examples = self.examples[:num_examples]
+        elif volume_sample_rate < 1.0:  # sample by volume
+            vol_names = sorted(list({f[0].stem for f in self.examples}))
+            random.shuffle(vol_names)
+            num_volumes = round(len(vol_names) * volume_sample_rate)
+            sampled_vols = vol_names[:num_volumes]
+            self.examples = [
+                example for example in self.examples if example[0].stem in sampled_vols
+            ]
+
+        if num_cols:
+            self.examples = [ex for ex in self.examples if ex[2]["encoding_size"][1] in num_cols]  # type: ignore
+
+    def convert_mask(self, mask, n_classes=2, compact=False):
+        x, y, z = mask.shape
+        out = np.zeros((x, y, z, n_classes), dtype=np.bool)
+        for i in range(n_classes):
+            out[:, :, :, i] = mask == i
+        out = rearrange(out, "c h w s -> c s h w")
+        return out.astype(np.uint8)
+
     def __getitem__(self, i: int):
         fname, dataslice, metadata = self.examples[i]
         with h5py.File(fname, "r") as hf:
-            kspace = hf["kspace"][dataslice].astype(np.complex64)
+            kspace = hf["kspace"][dataslice : dataslice + self.seq_len].astype(
+                np.complex64
+            )
 
             if "sensitivity_map" in hf:
-                sensitivity_map = hf["sensitivity_map"][dataslice].astype(np.complex64)
+                sensitivity_map = hf["sensitivity_map"][
+                    dataslice : dataslice + self.seq_len
+                ].astype(np.complex64)
             elif self.sense_root is not None and self.sense_root != "None":
                 with h5py.File(
                     Path(self.sense_root)
@@ -453,10 +534,10 @@ class MRISliceDataset(FastMRISliceDataset):
                     "r",
                 ) as sf:
                     sensitivity_map = (
-                        sf["sensitivity_map"][dataslice]
+                        sf["sensitivity_map"][dataslice : dataslice + self.seq_len]
                         if "sensitivity_map" in sf
                         or "sensitivity_map" in next(iter(sf.keys()))
-                        else sf["sense"][dataslice]
+                        else sf["sense"][dataslice : dataslice + self.seq_len]
                     )
                     sensitivity_map = sensitivity_map.squeeze().astype(np.complex64)
             else:
@@ -466,7 +547,7 @@ class MRISliceDataset(FastMRISliceDataset):
                 mask = np.asarray(hf["mask"])
 
                 if mask.ndim == 3:
-                    mask = mask[dataslice]
+                    mask = mask[dataslice : dataslice + self.seq_len]
 
             elif self.mask_root is not None and self.mask_root != "None":
                 mask_path = Path(self.mask_root) / Path(
@@ -477,7 +558,7 @@ class MRISliceDataset(FastMRISliceDataset):
                 mask = None
 
             eta = (
-                hf["eta"][dataslice].astype(np.complex64)
+                hf["eta"][dataslice : dataslice + self.seq_len].astype(np.complex64)
                 if "eta" in hf
                 else np.array([])
             )
@@ -485,23 +566,33 @@ class MRISliceDataset(FastMRISliceDataset):
             if "reconstruction_sense" in hf:
                 self.recons_key = "reconstruction_sense"
 
-            target = hf[self.recons_key][dataslice] if self.recons_key in hf else None
+            target = (
+                hf[self.recons_key][dataslice : dataslice + self.seq_len]
+                if self.recons_key in hf
+                else None
+            )
+
+            if self.segmentation:
+                if "lesion_segmentation" in hf:
+                    seg_key = "lesion_segmentation"
+                elif "segmentation" in hf:
+                    seg_key = "segmentation"
+                else:
+                    seg_key = None
+
+                segmentation = (
+                    self.convert_mask(hf[seg_key][dataslice : dataslice + self.seq_len])
+                    if seg_key
+                    else torch.Tensor([])
+                )
+            else:
+                segmentation = torch.Tensor([])
 
             attrs = dict(hf.attrs)
             attrs.update(metadata)
 
         if sensitivity_map.shape != kspace.shape:
             sensitivity_map = np.transpose(sensitivity_map, (2, 0, 1))
-
-        if self.segmentation:
-            if "segmentation" in hf:
-                seg_key = "segmentation"
-            elif "lesion_segmentation" in hf:
-                seg_key = "lesion_segmentation"
-            else:
-                seg_key = None
-
-        segmentation = hf[seg_key][dataslice] if seg_key in hf else None
 
         if self.transform is not None:
             out = self.transform(
@@ -526,4 +617,4 @@ class MRISliceDataset(FastMRISliceDataset):
                 dataslice,
             )
 
-        return (*(out), segmentation)
+        return (*out, segmentation)

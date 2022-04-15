@@ -65,10 +65,10 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
             prediction = torch.nn.functional.softmax(outputs[0], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
-            self.inputs = input
-            self.targets = target
-            self.predictions = prediction
-            self.metrics = outputs[1]
+            self.inputs = input.detach()
+            self.targets = target.detach()
+            self.predictions = prediction.detach()
+            self.metrics = outputs[1].detach()
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -145,10 +145,10 @@ class LogSegmentationMasksDWI(pl.Callback):
             prediction = torch.nn.functional.softmax(outputs[0], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
-            self.inputs = input
-            self.targets = target
-            self.predictions = prediction
-            self.metrics = outputs[1]
+            self.inputs = input.detach()
+            self.targets = target.detach()
+            self.predictions = prediction.detach()
+            self.metrics = outputs[1].detach()
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -222,10 +222,10 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
             prediction = torch.nn.functional.softmax(outputs[0], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
-            self.inputs = input
-            self.targets = target
-            self.predictions = prediction
-            self.metrics = outputs[1]
+            self.inputs = input.detach()
+            self.targets = target.detach()
+            self.predictions = prediction.detach()
+            self.metrics = outputs[1].detach()
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -271,7 +271,7 @@ class LogIntermediateReconstruction(pl.Callback):
         super().__init__()
         self.num_examples = num_examples
 
-        self.prediction = []
+        self.predictions = []
         self.captions = []
         self.metrics = []
 
@@ -279,20 +279,30 @@ class LogIntermediateReconstruction(pl.Callback):
     def on_validation_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx,
     ) -> None:
-        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
+        (
+            y,
+            sensitivity_maps,
+            mask,
+            init_pred,
+            target,
+            fname,
+            slice_num,
+            _,
+            segmentation,
+        ) = batch
         if (int(slice_num) > 70 and int(slice_num) < 120) or (
             len(self.predictions) > self.num_examples
         ):
             preds = outputs[0]
             metric = outputs[1]
             if isinstance(preds, list):
-                preds = [i for j in preds for i in j]
+                preds = [i[0].unsqueeze(0) for j in preds for i in j]
                 if len(preds) > 1:
-                    pred_stack = torch.stack(preds, dim=0)
-                    pred_stack = torch.abs(pred_stack) / torch.amax(
-                        torch.abs(pred_stack), dim=0
+                    pred_stack = torch.stack(preds)
+                    pred_stack = torch.abs(pred_stack) / torch.abs(pred_stack).amax(
+                        (-1, -2), True
                     )
-                    preds = list(pred_stack.detach().cpu())
+                    preds = list(pred_stack.detach())
                 else:
                     preds = preds[-1]
 
@@ -300,8 +310,8 @@ class LogIntermediateReconstruction(pl.Callback):
             self.captions.append(f"{fname[0][:-3]}_slice_{int(slice_num)}")
             self.metrics.append(
                 (
-                    f"psnr: {metric['psnr'].mean():.3f}",
-                    f"ssim: {metric['ssim'].mean():.3f}",
+                    f"psnr: {metric['psnr'].detach().mean():.3f}",
+                    f"ssim: {metric['ssim'].detach().mean():.3f}",
                 )
             )
 
@@ -352,7 +362,17 @@ class LogReconstructionTECFIDERA(pl.Callback):
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
     ):
 
-        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
+        (
+            y,
+            sensitivity_maps,
+            mask,
+            init_pred,
+            target,
+            fname,
+            slice_num,
+            _,
+            segmentation,
+        ) = batch
         if (int(slice_num) > 70 and int(slice_num) < 120) or (
             len(self.predictions) > self.num_examples
         ):
@@ -360,11 +380,11 @@ class LogReconstructionTECFIDERA(pl.Callback):
             metric = outputs[1]
             # print(metric)
             if isinstance(preds, list):
-                preds = [i for j in preds for i in j]
+                preds = [i[0].unsqueeze(0) for j in preds for i in j]
                 if len(preds) > 1:
                     pred_stack = torch.stack(preds, dim=0)
-                    pred_stack = torch.abs(pred_stack) / torch.amax(
-                        torch.abs(pred_stack), dim=0
+                    pred_stack = torch.abs(pred_stack) / torch.abs(pred_stack).amax(
+                        (-1, -2), True
                     )
                     # weights = F.softmax(
                     #     torch.logspace(
@@ -372,7 +392,7 @@ class LogReconstructionTECFIDERA(pl.Callback):
                     #     ),
                     #     dim=0,
                     # )
-                    uncertainty = torch.std(pred_stack, dim=0).detach().cpu()
+                    uncertainty = torch.std(pred_stack, dim=0).detach()
                 else:
                     uncertainty = None
 
@@ -383,15 +403,15 @@ class LogReconstructionTECFIDERA(pl.Callback):
             if isinstance(mask, list):
                 mask = mask[0]
 
-            self.targets.append(target.detach().cpu())
-            self.predictions.append(preds.detach().cpu())
+            self.targets.append(target[:, 0, :, :].detach())
+            self.predictions.append(preds.detach())
             self.captions.append(f"{fname[0][:-3]}_slice_{int(slice_num)}")
             self.std.append(uncertainty)
-            self.masks.append(mask.detach().cpu())
+            self.masks.append(mask.detach())
             self.metrics.append(
                 (
-                    f"psnr: {metric['psnr'].mean():.3f}",
-                    f"ssim: {metric['ssim'].mean():.3f}",
+                    f"psnr: {metric['psnr'].detach().mean():.3f}",
+                    f"ssim: {metric['ssim'].detach().mean():.3f}",
                 )
             )
 
@@ -420,7 +440,7 @@ class LogReconstructionTECFIDERA(pl.Callback):
                 uncertainty = torch.zeros_like(pred)
 
             image_grid = torchvision.utils.make_grid(
-                [pred, target, error, uncertainty, mask[0, :, :, :, 0]], nrow=5
+                [pred, target, error, uncertainty, mask.squeeze().unsqueeze(0)], nrow=5
             )
             cap_str = f"{cap}: reconstruction, target, error, uncertainty, mask. {metric[0]}, {metric[1]}."
 
@@ -459,7 +479,7 @@ class NumParamCallback(pl.Callback):
         super().__init__()
 
     @rank_zero_only
-    def on_pretrain_routine_start(self, trainer, pl_module):
+    def on_fit_start(self, trainer, pl_module):
         trainable_params = sum(
             p.numel() for p in pl_module.parameters() if p.requires_grad
         )
@@ -491,7 +511,7 @@ class InferenceTimeCallback(pl.Callback):
 
     @rank_zero_only
     @torch.no_grad()
-    def on_pretrain_routine_start(self, trainer, pl_module):
+    def on_fit_start(self, trainer, pl_module):
         if pl_module.training:
             pl_module.eval()
 

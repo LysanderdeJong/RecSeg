@@ -15,7 +15,7 @@ from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.plugins import DDPPlugin
 
-from mridc.collections.common.parts.ptl_overrides import MRIDCNativeMixedPrecisionPlugin
+from pytorch_lightning.profiler import AdvancedProfiler
 
 from callbacks import (
     LogIntermediateReconstruction,
@@ -74,7 +74,7 @@ def train(args):
     trainer = pl.Trainer(
         default_root_dir=args.log_dir,
         auto_select_gpus=True,
-        gpus=[1],  # None if args.gpus == "None" else int(args.gpus),
+        gpus=[0],  # None if args.gpus == "None" else int(args.gpus),
         # strategy=DDPPlugin(find_unused_parameters=False),
         max_epochs=args.epochs,
         callbacks=callbacks,
