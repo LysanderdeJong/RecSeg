@@ -1,3 +1,4 @@
+from logging import exception
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -68,7 +69,7 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
             self.inputs = input.detach()
             self.targets = target.detach()
             self.predictions = prediction.detach()
-            self.metrics = outputs[0].detach()
+            self.metrics = outputs[0]
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -148,7 +149,7 @@ class LogSegmentationMasksDWI(pl.Callback):
             self.inputs = input.detach()
             self.targets = target.detach()
             self.predictions = prediction.detach()
-            self.metrics = outputs[0].detach()
+            self.metrics = outputs[0]
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -195,7 +196,7 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
         super().__init__()
         self.num_examples = num_examples
         self.class_labels = {
-            2: {0: "Background", 1: "Lesion"},
+            4: {0: "Background", 1: "Graymatter", 2: "Whitematter", 3: "Lesion"},
         }
 
         self.inputs = []
@@ -220,11 +221,17 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
             if torch.is_complex(input):
                 input = torch.abs(input)
             else:
-                input = torch.abs(
-                    torch.view_as_complex(
-                        rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()
+                try:
+                    input = torch.abs(
+                        torch.view_as_complex(
+                            rearrange(
+                                input, "b (c i) h w -> b c h w i", i=2
+                            ).contiguous()
+                        )
                     )
-                )
+                except Exception:
+                    pass
+
             self.num_classes = target.shape[1]
             target = torch.argmax(target, dim=1)
             prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
@@ -233,7 +240,7 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
             self.inputs = input.detach()
             self.targets = target.detach()
             self.predictions = prediction.detach()
-            self.metrics = outputs[0].detach()
+            self.metrics = outputs[0]
 
     @rank_zero_only
     def on_validation_end(self, trainer, pl_module):
@@ -279,7 +286,7 @@ class LogSegmentationMasksRECSEGTECFIDERA(pl.Callback):
         super().__init__()
         self.num_examples = num_examples
         self.class_labels = {
-            2: {0: "Background", 1: "Lesion"},
+            4: {0: "Background", 1: "Graymatter", 2: "Whitematter", 3: "Lesion"},
         }
 
         self.inputs = []
@@ -311,16 +318,24 @@ class LogSegmentationMasksRECSEGTECFIDERA(pl.Callback):
             if torch.is_complex(input):
                 input = torch.abs(input)
             else:
-                input = torch.abs(
-                    torch.view_as_complex(
-                        rearrange(input, "b (c i) h w -> b c h w i", i=2).contiguous()
+                try:
+                    input = torch.abs(
+                        torch.view_as_complex(
+                            rearrange(
+                                input, "b (c i) h w -> b c h w i", i=2
+                            ).contiguous()
+                        )
                     )
-                )
+                except Exception:
+                    pass
 
             self.num_classes = segmentation.shape[-3]
             target = torch.argmax(segmentation.squeeze(), dim=-3)
             prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
             prediction = torch.argmax(prediction, dim=1)
+
+            if len(target.shape) < 3:
+                target = target.unsqueeze(0)
 
             self.inputs.append(input[0].detach())
             self.targets.append(target[0].detach())
@@ -344,6 +359,7 @@ class LogSegmentationMasksRECSEGTECFIDERA(pl.Callback):
                 self.metrics,
             )
         ):
+
             image = input
             image = image / image.max() * 255
             image = image.cpu().numpy().astype(np.uint8)
@@ -389,6 +405,7 @@ class LogIntermediateReconstruction(pl.Callback):
         self.predictions = []
         self.captions = []
         self.metrics = []
+        self.nrows = []
 
     @rank_zero_only
     def on_validation_batch_end(
@@ -411,6 +428,7 @@ class LogIntermediateReconstruction(pl.Callback):
             preds = outputs[1]
             metric = outputs[0]
             if isinstance(preds, list):
+                self.nrows.append(len(preds[-1]))
                 preds = [i[0].unsqueeze(0) for j in preds for i in j]
                 if len(preds) > 1:
                     pred_stack = torch.stack(preds)
@@ -436,10 +454,10 @@ class LogIntermediateReconstruction(pl.Callback):
 
         image_list = []
         captions = []
-        for i, (pred, cap, metric) in enumerate(
-            zip(self.predictions, self.captions, self.metrics,)
+        for i, (pred, cap, metric, nrow) in enumerate(
+            zip(self.predictions, self.captions, self.metrics, self.nrows)
         ):
-            image_grid = torchvision.utils.make_grid(pred)
+            image_grid = torchvision.utils.make_grid(pred, nrow=nrow)
             cap_str = f"{cap}: intermediate results. {metric[0]}, {metric[1]}."
 
             image_list.append(image_grid)
@@ -458,6 +476,7 @@ class LogIntermediateReconstruction(pl.Callback):
         self.predictions = []
         self.captions = []
         self.metrics = []
+        self.nrows = []
 
 
 class LogReconstructionTECFIDERA(pl.Callback):
@@ -507,7 +526,11 @@ class LogReconstructionTECFIDERA(pl.Callback):
                     #     ),
                     #     dim=0,
                     # )
-                    uncertainty = torch.std(pred_stack, dim=0).detach()
+                    uncertainty = torch.sqrt(
+                        torch.square(pred_stack - pred_stack[-1]).sum(0)
+                        / pred_stack.shape[0]
+                    ).detach()
+                    # uncertainty = torch.std(pred_stack, dim=0).detach()
                 else:
                     uncertainty = None
 
@@ -632,7 +655,7 @@ class InferenceTimeCallback(pl.Callback):
 
         dummy_input = pl_module.example_input_array
         if not isinstance(dummy_input, list):
-            dummy_input = list(dummy_input)
+            dummy_input = [dummy_input]
         dummy_input = [i.to(pl_module.device) for i in dummy_input]
 
         starter, ender = (

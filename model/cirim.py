@@ -170,22 +170,26 @@ class CIRIM(nn.Module):
                 torch.abs(eta / torch.abs(eta).amax((-1, -2), True)), target
             )
 
-        loss_weights = torch.logspace(-1, 0, steps=len(eta[-1]), device=target.device)
-
-        cascade_list = []
+        cascades_loss = []
         for cascade_eta in eta:
-            time_step_stack = torch.stack(cascade_eta)
-            cascade_list.append(time_step_stack)
-        cascade_stack = torch.stack(cascade_list)
-        cascade_stack = torch.abs(
-            cascade_stack / torch.abs(cascade_stack).amax((-1, -2), True)
-        )
-        cascade_stack_loss = _loss_fn(
-            cascade_stack, target.expand_as(cascade_stack), reduction="none"
-        )
-        return (
-            cascade_stack_loss.mean((0, -2, -1)) * loss_weights.reshape(-1, 1)
-        ).mean()
+            time_steps_loss = [
+                _loss_fn(
+                    torch.abs(
+                        time_step_eta / torch.abs(time_step_eta).amax((-1, -2), True)
+                    ),
+                    target,
+                )
+                for time_step_eta in cascade_eta
+            ]
+            _loss = [
+                x
+                * torch.logspace(
+                    -1, 0, steps=self.time_steps, device=time_steps_loss[0].device
+                )
+                for x in time_steps_loss
+            ]
+            cascades_loss.append(sum(sum(_loss) / len(eta[-1])))
+        return sum(list(cascades_loss)) / len(eta)
 
 
 class CIRIMModule(pl.LightningModule):

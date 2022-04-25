@@ -287,7 +287,7 @@ class Unet3dModule(pl.LightningModule):
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=7, cooldown=1
+                optim, mode="min", factor=0.5, patience=5, cooldown=1
             ),
             "monitor": "val_loss",
         }

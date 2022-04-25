@@ -120,7 +120,7 @@ class DeepLabModule(pl.LightningModule):
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=5, cooldown=0
+                optim, mode="min", factor=0.5, patience=5, cooldown=0
             ),
             "monitor": "val_loss",
         }

@@ -287,7 +287,7 @@ class TecFidera(Dataset):
                 mri = h5py.File(mri_path, "r")
 
                 mri_shape = mri["reconstruction_sense"].shape[0]
-                mask_shape = mri["lesion_segmentation"].shape[0]
+                mask_shape = mri["segmentation"].shape[0]
 
                 mri_num_slices = mri_shape - self.seq_len + 1
                 mask_num_slices = mask_shape - self.seq_len + 1
@@ -322,7 +322,7 @@ class TecFidera(Dataset):
             ]
         )
         mask = np.array(
-            h5py.File(fmask, "r")["lesion_segmentation"][
+            h5py.File(fmask, "r")["segmentation"][
                 mask_slice : mask_slice + self.seq_len, :, :
             ]
         )
@@ -341,7 +341,7 @@ class TecFidera(Dataset):
 
         return mri_image, seg_mask
 
-    def convert_mask(self, mask, n_classes=2, compact=False):
+    def convert_mask(self, mask, n_classes=4, compact=False):
         x, y, z = mask.shape
         out = np.zeros((x, y, z, n_classes), dtype=np.bool)
         for i in range(n_classes):
@@ -507,7 +507,7 @@ class MRISliceDataset(FastMRISliceDataset):
         if num_cols:
             self.examples = [ex for ex in self.examples if ex[2]["encoding_size"][1] in num_cols]  # type: ignore
 
-    def convert_mask(self, mask, n_classes=2, compact=False):
+    def convert_mask(self, mask, n_classes=4, compact=False):
         x, y, z = mask.shape
         out = np.zeros((x, y, z, n_classes), dtype=np.bool)
         for i in range(n_classes):

@@ -129,7 +129,7 @@ class SKMDataModule(pl.LightningDataModule):
         )
         parser.add_argument(
             "--train_fraction",
-            default=0.8,
+            default=0.85,
             type=float,
             help="Fraction of th data used for training.",
         )
@@ -261,7 +261,7 @@ class BrainDWIDataModule(pl.LightningDataModule):
         )
         parser.add_argument(
             "--train_fraction",
-            default=0.8,
+            default=0.85,
             type=float,
             help="Fraction of th data used for training.",
         )
@@ -367,7 +367,7 @@ class TecFideraDataModule(pl.LightningDataModule):
         )
         parser.add_argument(
             "--train_fraction",
-            default=0.8,
+            default=0.85,
             type=float,
             help="Fraction of th data used for training.",
         )

@@ -30,12 +30,9 @@ class RecSegModule(pl.LightningModule):
             torch.rand(3, 320, 320),  # target
         ]
 
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
-
     def forward(self, y, sensitivity_maps, mask, init_pred, target):
         recons = self.cirim.forward(y, sensitivity_maps, mask, init_pred, target)
-        x = rearrange(torch.view_as_real(recons[-1][-1]), "b h w c -> b c h w")
+        x = rearrange(torch.view_as_real(recons[-1][-1].detach()), "b h w c -> b c h w")
         x = F.group_norm(x, num_groups=1)
         seg = self.lambdaunet.forward(x)
         return recons, seg
@@ -77,15 +74,16 @@ class RecSegModule(pl.LightningModule):
             "l1": loss,
             "psnr": FM.psnr(output.unsqueeze(-3), target.unsqueeze(-3)),
             "ssim": FM.ssim(output.unsqueeze(-3), target.unsqueeze(-3)),
-            "cross_entropy": self.cross_entropy(
+            "cross_entropy": self.lambdaunet.cross_entropy(
                 pred_seg, torch.argmax(segmentation, dim=1).long()
             ),
         }
-        dice_loss, dice_score = self.dice_loss(pred_seg, segmentation)
+        dice_loss, dice_score = self.lambdaunet.dice_loss(pred_seg, segmentation)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
         loss_dict["loss"] = (
-            loss_dict["cross_entropy"] + loss_dict["dice_loss"] + loss_dict["l1"]
+            0.001 * (loss_dict["cross_entropy"] + loss_dict["dice_loss"])
+            + 0.999 * loss_dict["l1"]
         )
         return loss_dict, preds_recon, pred_seg
 
@@ -113,21 +111,13 @@ class RecSegModule(pl.LightningModule):
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
-            [
-                {"params": filter(lambda p: p.requires_grad, self.cirim.parameters()),},
-                {
-                    "params": filter(
-                        lambda p: p.requires_grad, self.lambdaunet.parameters()
-                    ),
-                    "lr": self.hparams.lr * 10,
-                },
-            ],
+            filter(lambda p: p.requires_grad, self.parameters()),
             lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay,
         )
         scheduler = {
             "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optim, mode="min", factor=0.1, patience=7, cooldown=1
+                optim, mode="min", factor=0.5, patience=5, cooldown=1
             ),
             "monitor": "val_loss",
         }
@@ -262,7 +252,7 @@ class RecSegModule(pl.LightningModule):
             "--in_chans", default=2, type=int, help="Number of U-Net input channels"
         )
         parser.add_argument(
-            "--out_chans", default=2, type=int, help="Number of U-Net output chanenls"
+            "--out_chans", default=4, type=int, help="Number of U-Net output chanenls"
         )
         parser.add_argument(
             "--chans", default=32, type=int, help="Number of top-level U-Net filters."

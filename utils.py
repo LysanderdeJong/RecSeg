@@ -15,6 +15,7 @@ from model.deeplab import DeepLabModule
 from model.unet3d import Unet3dModule
 from model.attunet import AttUnetModule
 from model.cirim import CIRIMModule
+from model.idslr import IDSLRModule
 from pl_model import RecSegModule
 
 
@@ -52,6 +53,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             parser = CIRIMModule.add_model_specific_args(parser)
         elif args.model == "recseg":
             parser = RecSegModule.add_model_specific_args(parser)
+        elif args.model == "idslr":
+            parser = IDSLRModule.add_model_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -72,6 +75,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             return CIRIMModule(**kwargs)
         elif model == "recseg":
             return RecSegModule(**kwargs)
+        elif model == "idslr":
+            return IDSLRModule(**kwargs)
         else:
             raise NotImplementedError
     else:

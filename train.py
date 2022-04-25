@@ -15,7 +15,7 @@ from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.plugins import DDPPlugin
 
-from pytorch_lightning.profiler import AdvancedProfiler
+from pytorch_lightning.profiler import PyTorchProfiler
 
 from callbacks import (
     LogIntermediateReconstruction,
@@ -34,7 +34,7 @@ from utils import parse_known_args, get_dataset, get_model
 
 def train(args):
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    pl.seed_everything(args.seed, workers=True)
+    args.seed = pl.seed_everything(args.seed, workers=True)
     os.makedirs(args.log_dir, exist_ok=True)
 
     # Create a PyTorch Lightning trainer
@@ -42,22 +42,24 @@ def train(args):
     modelcheckpoint = ModelCheckpoint(
         monitor="val_loss",
         mode="min",
-        save_top_k=5,
+        save_top_k=3,
         save_last=True,
         filename="{epoch}-{val_loss:.4f}",
     )
     callbacks.append(modelcheckpoint)
     # callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
-    callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=10))
+    callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=8))
     callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval="step"))
     callbacks.append(NumParamCallback())
     callbacks.append(InferenceTimeCallback())
     if args.wandb:
+        os.environ["WANDB_CACHE_DIR"] = "/scratch/lgdejong/.cache/wandb/"
         wandb_logger = WandbLogger(
-            project="techfidera-recseg", log_model="all", entity="lysander"
+            project="techfidera-recseg", log_model="all", entity="lysander",
         )
+
         if args.dataset == "skmtea":
             callbacks.append(LogSegmentationMasksSKMTEA())
         elif args.dataset == "braindwi":
@@ -69,6 +71,8 @@ def train(args):
             callbacks.append(LogIntermediateReconstruction())
         if args.model == "recseg" and args.dataset == "tecfideramri":
             callbacks.append(LogSegmentationMasksRECSEGTECFIDERA())
+        elif args.model == "idslr" and args.dataset == "tecfideramri":
+            callbacks.append(LogSegmentationMasksRECSEGTECFIDERA())
     else:
         callbacks.append(LogCallback())
     if not args.progress_bar:
@@ -77,7 +81,7 @@ def train(args):
     trainer = pl.Trainer(
         default_root_dir=args.log_dir,
         auto_select_gpus=True,
-        gpus=[0],  # None if args.gpus == "None" else int(args.gpus),
+        gpus=None if args.gpus == "None" else args.gpus,
         # strategy=DDPPlugin(find_unused_parameters=False),
         max_epochs=args.epochs,
         callbacks=callbacks,
@@ -92,7 +96,9 @@ def train(args):
         gradient_clip_val=args.grad_clip,
         benchmark=True if args.benchmark else False,
         # plugins=[MRIDCNativeMixedPrecisionPlugin()],
-        profiler=args.profiler if args.profiler else None,
+        # profiler=PyTorchProfiler(
+        #     dirpath="/scratch/lgdejong/projects/RecSeg/logs/", filename="recseg_profile"
+        # ),  # args.profiler if args.profiler else None,
         enable_model_summary=False,
         logger=wandb_logger if args.wandb else True,
         fast_dev_run=True if args.fast_dev_run else False,
@@ -161,7 +167,9 @@ if __name__ == "__main__":
         "--grad_clip", default=None, type=float, help="Clip the gradient norm."
     )
 
-    parser.add_argument("--gpus", default="1", type=str, help="Which gpus to use.")
+    parser.add_argument(
+        "--gpus", nargs="+", default=[0], type=int, help="Which gpus to use."
+    )
 
     parser.add_argument(
         "--checkpoint_path",
@@ -172,7 +180,7 @@ if __name__ == "__main__":
 
     # other hyperparameters
     parser.add_argument(
-        "--seed", default=42, type=int, help="Seed to use for reproducing results"
+        "--seed", default=None, type=int, help="Seed to use for reproducing results"
     )
     parser.add_argument(
         "--log_dir",
