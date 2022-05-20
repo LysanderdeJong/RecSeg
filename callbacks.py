@@ -52,7 +52,7 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
     ):
         if batch_idx == 1:
-            input, target = batch
+            fname, input, target = batch
             if len(input.shape) == 5:
                 input = rearrange(input, "b t c h w -> (b t) c h w")
                 target = rearrange(target, "b t c h w -> (b t) c h w")
@@ -66,9 +66,9 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
             prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
-            self.inputs = input.detach()
-            self.targets = target.detach()
-            self.predictions = prediction.detach()
+            self.inputs = input.detach().cpu()
+            self.targets = target.detach().cpu()
+            self.predictions = prediction.detach().cpu()
             self.metrics = outputs[0]
 
     @rank_zero_only
@@ -136,7 +136,7 @@ class LogSegmentationMasksDWI(pl.Callback):
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
     ):
         if batch_idx == 1:
-            input, target = batch
+            fname, input, target = batch
             if len(input.shape) == 5:
                 input = rearrange(input, "b t c h w -> (b t) c h w")
             if len(target.shape) == 5:
@@ -146,9 +146,9 @@ class LogSegmentationMasksDWI(pl.Callback):
             prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
-            self.inputs = input.detach()
-            self.targets = target.detach()
-            self.predictions = prediction.detach()
+            self.inputs = input.detach().cpu()
+            self.targets = target.detach().cpu()
+            self.predictions = prediction.detach().cpu()
             self.metrics = outputs[0]
 
     @rank_zero_only
@@ -197,6 +197,7 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
         self.num_examples = num_examples
         self.class_labels = {
             4: {0: "Background", 1: "Graymatter", 2: "Whitematter", 3: "Lesion"},
+            2: {0: "Background", 1: "Lesion"},
         }
 
         self.inputs = []
@@ -209,11 +210,11 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
     ):
         if batch_idx == 1:
-            if len(batch) > 2:
+            if len(batch) > 3:
                 input = outputs[1][-1][-1]
                 target = batch
             else:
-                input, target = batch
+                fname, input, target = batch
             if len(input.shape) == 5:
                 input = rearrange(input, "b t c h w -> (b t) c h w")
                 target = rearrange(target, "b t c h w -> (b t) c h w")
@@ -237,9 +238,9 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
             prediction = torch.nn.functional.softmax(outputs[-1], dim=1)
             prediction = torch.argmax(prediction, dim=1)
 
-            self.inputs = input.detach()
-            self.targets = target.detach()
-            self.predictions = prediction.detach()
+            self.inputs = input.detach().cpu()
+            self.targets = target.detach().cpu()
+            self.predictions = prediction.detach().cpu()
             self.metrics = outputs[0]
 
     @rank_zero_only
@@ -281,12 +282,107 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
         self.predictions = []
 
 
+class LogUncertaintyTECFIDERA(pl.Callback):
+    def __init__(self, num_examples=5):
+        super().__init__()
+        self.num_examples = num_examples
+
+        self.inputs = []
+        self.targets = []
+        self.uncertaity = []
+        self.predictions = []
+        self.metrics = []
+
+        self.exit = False
+
+    @rank_zero_only
+    def on_validation_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
+    ):
+        if len(self.inputs) < self.num_examples and not self.exit:
+            if len(batch) > 3:
+                input = outputs[1][-1][-1]
+                target = batch
+            else:
+                fname, input, target = batch
+            if len(input.shape) == 5:
+                input = rearrange(input, "b t c h w -> (b t) c h w")
+                target = rearrange(target, "b t c h w -> (b t) c h w")
+
+            if torch.is_complex(input):
+                input = torch.abs(input)
+            else:
+                try:
+                    input = torch.abs(
+                        torch.view_as_complex(
+                            rearrange(
+                                input, "b (c i) h w -> b c h w i", i=2
+                            ).contiguous()
+                        )
+                    )
+                except Exception:
+                    pass
+
+            self.num_classes = target.shape[1]
+
+            if outputs[-1].shape[1] == target.shape[1]:
+                print("Uncertainty Callback disabled.")
+                self.exit = True
+
+            self.inputs.append(input.detach().cpu())
+            self.uncertaity.append(
+                outputs[-1][:, self.num_classes :, ...].detach().cpu()
+            )
+            self.metrics.append(outputs[0])
+
+    @rank_zero_only
+    def on_validation_end(self, trainer, pl_module):
+        if not self.exit:
+            num_examples = min(self.num_examples, len(self.inputs))
+            image_list = []
+            captions = []
+            # print(len(self.inputs), len(self.uncertaity), len(self.metrics))
+            for i, (input, uncertainty, metric) in enumerate(
+                zip(self.inputs, self.uncertaity, self.metrics,)
+            ):
+                image = input[0, ...]
+                image = image / image.amax()
+
+                uncertainty = uncertainty[0, ...]
+                uncertainty_list = [
+                    (uncertainty[j, ...] / uncertainty[j, ...].amax()).unsqueeze(0)
+                    for j in range(uncertainty.shape[0])
+                ]
+
+                image_grid = torchvision.utils.make_grid(
+                    [image] + uncertainty_list,
+                    nrow=len(uncertainty_list) + 1,
+                    scale_each=True,
+                    normalize=True,
+                )
+                image_list.append(image_grid)
+                caption_str = f"Uncertainty over the different classes. DSC: {metric['dice_score'].detach().mean():.3f}"
+                captions.append(caption_str)
+
+                if i >= num_examples:
+                    break
+
+            if image_list:
+                trainer.logger.log_image(
+                    key="Uncertainty", images=image_list, caption=captions
+                )
+        self.inputs = []
+        self.uncertainty = []
+        self.metrics = []
+
+
 class LogSegmentationMasksRECSEGTECFIDERA(pl.Callback):
     def __init__(self, num_examples=5):
         super().__init__()
         self.num_examples = num_examples
         self.class_labels = {
             4: {0: "Background", 1: "Graymatter", 2: "Whitematter", 3: "Lesion"},
+            2: {0: "Background", 1: "Lesion"},
         }
 
         self.inputs = []
@@ -337,9 +433,9 @@ class LogSegmentationMasksRECSEGTECFIDERA(pl.Callback):
             if len(target.shape) < 3:
                 target = target.unsqueeze(0)
 
-            self.inputs.append(input[0].detach())
-            self.targets.append(target[0].detach())
-            self.predictions.append(prediction[0].detach())
+            self.inputs.append(input[0].detach().cpu())
+            self.targets.append(target[0].detach().cpu())
+            self.predictions.append(prediction[0].detach().cpu())
             self.captions.append(f"{fname[0][:-3]}_slice_{int(slice_num)}")
             self.metrics.append(f"DSC: {outputs[0]['dice_score'].detach().mean():.3f}")
 
@@ -435,9 +531,9 @@ class LogIntermediateReconstruction(pl.Callback):
                     pred_stack = torch.abs(pred_stack) / torch.abs(pred_stack).amax(
                         (-1, -2), True
                     )
-                    preds = list(pred_stack.detach())
+                    preds = list(pred_stack.detach().cpu())
                 else:
-                    preds = preds[-1]
+                    preds = preds[-1].cpu()
 
             self.predictions.append(preds)
             self.captions.append(f"{fname[0][:-3]}_slice_{int(slice_num)}")
@@ -526,10 +622,14 @@ class LogReconstructionTECFIDERA(pl.Callback):
                     #     ),
                     #     dim=0,
                     # )
-                    uncertainty = torch.sqrt(
-                        torch.square(pred_stack - pred_stack[-1]).sum(0)
-                        / pred_stack.shape[0]
-                    ).detach()
+                    uncertainty = (
+                        torch.sqrt(
+                            torch.square(pred_stack - pred_stack[-1]).sum(0)
+                            / pred_stack.shape[0]
+                        )
+                        .detach()
+                        .cpu()
+                    )
                     # uncertainty = torch.std(pred_stack, dim=0).detach()
                 else:
                     uncertainty = None
@@ -541,11 +641,11 @@ class LogReconstructionTECFIDERA(pl.Callback):
             if isinstance(mask, list):
                 mask = mask[0]
 
-            self.targets.append(target[:, 0, :, :].detach())
-            self.predictions.append(preds.detach())
+            self.targets.append(target[:, 0, :, :].detach().cpu())
+            self.predictions.append(preds.detach().cpu())
             self.captions.append(f"{fname[0][:-3]}_slice_{int(slice_num)}")
             self.std.append(uncertainty)
-            self.masks.append(mask.detach())
+            self.masks.append(mask.detach().cpu())
             self.metrics.append(
                 (
                     f"psnr: {metric['psnr'].detach().mean():.3f}",

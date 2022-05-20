@@ -9,7 +9,7 @@ from einops import rearrange
 
 from mridc.collections.common.parts.fft import fft2c, ifft2c
 from mridc.collections.common.parts.utils import rss_complex
-from losses import DiceLoss
+from losses import DiceLoss, MC_CrossEntropy
 
 from model.unet import ConvBlock, TransposeConvBlock
 
@@ -346,9 +346,12 @@ class IDSLRModule(pl.LightningModule):
             torch.rand(1, 1, 256, 256, 1, device=self.device),
         ]
 
-        self.l2_norm = nn.MSELoss()
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
+        self.dice_loss = DiceLoss(include_background=False)
+        self.cross_entropy = MC_CrossEntropy(
+            weight=torch.tensor([0.05558904, 0.29847416, 0.31283098, 0.33310577])
+            if self.hparams.dataset in ["tecfidera", "techfideramri"]
+            else None,
+        )
 
     def forward(self, kspace, mask=None):
         image, seg = self.model(kspace, mask)
@@ -388,12 +391,10 @@ class IDSLRModule(pl.LightningModule):
         # print(fname, pred_seg.shape, segmentation.shape)
 
         loss_dict = {
-            "l2": self.l2_norm(image, target),
+            "l2": self.calculate_loss(pred_image, target),
             "psnr": FM.psnr(image.unsqueeze(-3), target.unsqueeze(-3)),
             "ssim": FM.ssim(image.unsqueeze(-3), target.unsqueeze(-3)),
-            "cross_entropy": self.cross_entropy(
-                pred_seg, torch.argmax(segmentation, dim=1).long()
-            ),
+            "cross_entropy": self.cross_entropy(pred_seg, segmentation.argmax(1)),
         }
 
         dice_loss, dice_score = self.dice_loss(pred_seg, segmentation)
@@ -432,6 +433,28 @@ class IDSLRModule(pl.LightningModule):
         else:
             r = 0
         return y, mask, r
+
+    def calculate_loss(self, eta, target, _loss_fn=F.mse_loss):
+        target = torch.abs(target / torch.abs(target).amax((-1, -2), True))
+        cascades_loss = []
+        for cascade_eta in eta:
+            time_step_loss = [
+                _loss_fn(
+                    torch.abs(
+                        time_step_eta / torch.abs(time_step_eta).amax((-1, -2), True)
+                    ),
+                    target,
+                )
+                for time_step_eta in cascade_eta
+            ]
+            time_step_loss_stack = torch.stack(time_step_loss)
+            loss_weights = torch.logspace(
+                -1, 0, steps=len(time_step_loss), device=time_step_loss_stack.device
+            )
+            cascades_loss.append(
+                sum(time_step_loss_stack * loss_weights) / len(time_step_loss)
+            )
+        return sum(cascades_loss) / len(cascades_loss)
 
     def fold(self, tensor):
         shape = list(tensor.shape[1:])

@@ -379,8 +379,8 @@ class TecFideraDataModule(pl.LightningDataModule):
         )
         parser.add_argument(
             "--compact_masks",
-            default=True,
-            type=bool,
+            action="store_true",
+            default=False,
             help="Whether to cache dataset metadata in a pkl file",
         )
 
@@ -405,7 +405,7 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
         super().__init__()
         self.save_hyperparameters()
 
-    def _make_dataset(self):
+    def _make_dataset(self, split="all", data_files=None):
         return MRISliceDataset(
             root=self.hparams.data_root,
             challenge=self.hparams.challenge,
@@ -423,6 +423,7 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
             use_seed=self.hparams.use_seed,
             segmentation=self.hparams.segmentation,
             seq_len=self.hparams.seq_len,
+            compact_mask=self.hparams.compact_mask,
         )
 
     def setup(self, stage=None):
@@ -470,7 +471,7 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
         # dataset arguments
         parser.add_argument(
             "--data_root",
-            default="/data/projects/tecfidera/data/h5_recon_dataset/",
+            default="/data/projects/tecfidera/data/h5_recon_dataset_new/",
             type=str,
             help="Path to the data root.",
         )
@@ -558,7 +559,7 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
             "--segmentation",
             action="store_true",
             default=False,
-            help="Whether to use the seed",
+            help="Produce a segmentation target along side the rest.",
         )
 
         parser.add_argument(
@@ -566,10 +567,17 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
         )
 
         parser.add_argument(
+            "--compact_mask",
+            action="store_true",
+            default=False,
+            help="Only segment lesions.",
+        )
+
+        parser.add_argument(
             "--train_fraction",
             default=0.85,
             type=float,
-            help="Fraction of th data used for training.",
+            help="Fraction of the data used for training.",
         )
 
         # data loader arguments

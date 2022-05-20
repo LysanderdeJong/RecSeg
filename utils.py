@@ -1,6 +1,8 @@
+import os
 import numpy as np
 import torch
 from einops import rearrange
+import wandb
 
 from dataloader import (
     SKMDataModule,
@@ -109,6 +111,15 @@ def get_dataset(parser=None, args=None, dataset=None, **kwargs):
             raise NotImplementedError
     else:
         raise ValueError
+
+
+def retrieve_checkpoint(
+    model_id, project="techfidera-recseg", epoch="best", download_dir=None
+):
+    api = wandb.Api()
+    artifact_path = os.path.join("lysander", project, f"model-{model_id}:{epoch}")
+    artifact = api.artifact(artifact_path, type="model")
+    return artifact.get_path("model.ckpt").download(root=download_dir)
 
 
 import sys

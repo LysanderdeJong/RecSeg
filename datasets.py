@@ -318,12 +318,12 @@ class TecFidera(Dataset):
 
         mri = np.array(
             h5py.File(fmri, "r")["reconstruction_sense"][
-                mri_slice : mri_slice + self.seq_len, :, :, :
+                mri_slice : mri_slice + self.seq_len, ...
             ]
         )
         mask = np.array(
             h5py.File(fmask, "r")["segmentation"][
-                mask_slice : mask_slice + self.seq_len, :, :
+                mask_slice : mask_slice + self.seq_len, ...
             ]
         )
 
@@ -339,14 +339,22 @@ class TecFidera(Dataset):
         # if self.target_transform:
         #     seg_mask = self.target_transform(seg_mask)
 
-        return mri_image, seg_mask
+        return (fmri.split("/")[-1], mri_slice), mri_image, seg_mask
 
     def convert_mask(self, mask, n_classes=4, compact=False):
-        x, y, z = mask.shape
-        out = np.zeros((x, y, z, n_classes), dtype=np.bool)
-        for i in range(n_classes):
-            out[:, :, :, i] = mask == i
-        return out.astype(np.uint8)
+        if len(mask.shape) == 3:
+            x, y, z = mask.shape
+            out = np.zeros((x, y, z, n_classes), dtype=np.bool)
+            for i in range(n_classes):
+                out[:, :, :, i] = mask == i
+            out = out.astype(np.uint8)
+        elif len(mask.shape) == 4:
+            out = mask
+        if compact:
+            out[..., 1] = out[..., 3]
+            out[..., 0] = 1 - out[..., 1]
+            out = out[..., :2]
+        return out
 
 
 from mridc.collections.reconstruction.data.mri_data import FastMRISliceDataset
@@ -380,6 +388,7 @@ class MRISliceDataset(FastMRISliceDataset):
         use_seed: bool = True,
         segmentation: bool = False,
         seq_len: int = 1,
+        compact_mask: bool = False,
     ):
 
         if accelerations is None:
@@ -388,6 +397,7 @@ class MRISliceDataset(FastMRISliceDataset):
             center_fractions = [0.7, 0.7, 0.7, 0.7]
         self.segmentation = segmentation
         self.seq_len = seq_len
+        self.compact_mask = compact_mask
 
         if mask_type is not None and mask_type != "None":
             mask_func = (
@@ -508,12 +518,20 @@ class MRISliceDataset(FastMRISliceDataset):
             self.examples = [ex for ex in self.examples if ex[2]["encoding_size"][1] in num_cols]  # type: ignore
 
     def convert_mask(self, mask, n_classes=4, compact=False):
-        x, y, z = mask.shape
-        out = np.zeros((x, y, z, n_classes), dtype=np.bool)
-        for i in range(n_classes):
-            out[:, :, :, i] = mask == i
+        if len(mask.shape) == 3:
+            x, y, z = mask.shape
+            out = np.zeros((x, y, z, n_classes), dtype=np.bool)
+            for i in range(n_classes):
+                out[:, :, :, i] = mask == i
+            out - out.astype(np.uint8)
+        elif len(mask.shape) == 4:
+            out = mask
+        if compact:
+            out[..., 1] = out[..., 3]
+            out[..., 0] = 1 - out[..., 1]
+            out = out[..., :2]
         out = rearrange(out, "c h w s -> c s h w")
-        return out.astype(np.uint8)
+        return out
 
     def __getitem__(self, i: int):
         fname, dataslice, metadata = self.examples[i]
@@ -581,7 +599,10 @@ class MRISliceDataset(FastMRISliceDataset):
                     seg_key = None
 
                 segmentation = (
-                    self.convert_mask(hf[seg_key][dataslice : dataslice + self.seq_len])
+                    self.convert_mask(
+                        hf[seg_key][dataslice : dataslice + self.seq_len],
+                        compact=self.compact_mask,
+                    )
                     if seg_key
                     else torch.Tensor([])
                 )

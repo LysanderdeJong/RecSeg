@@ -13,7 +13,7 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.plugins import DDPPlugin
+from pytorch_lightning.strategies import DDPStrategy
 
 from pytorch_lightning.profiler import PyTorchProfiler
 
@@ -28,6 +28,7 @@ from callbacks import (
     LogSegmentationMasksDWI,
     LogSegmentationMasksTECFIDERA,
     LogSegmentationMasksRECSEGTECFIDERA,
+    LogUncertaintyTECFIDERA,
 )
 from utils import parse_known_args, get_dataset, get_model
 
@@ -66,6 +67,7 @@ def train(args):
             callbacks.append(LogSegmentationMasksDWI())
         elif args.dataset == "tecfidera":
             callbacks.append(LogSegmentationMasksTECFIDERA())
+            callbacks.append(LogUncertaintyTECFIDERA())
         elif args.dataset == "tecfideramri":
             callbacks.append(LogReconstructionTECFIDERA())
             callbacks.append(LogIntermediateReconstruction())
@@ -82,7 +84,7 @@ def train(args):
         default_root_dir=args.log_dir,
         auto_select_gpus=True,
         gpus=None if args.gpus == "None" else args.gpus,
-        # strategy=DDPPlugin(find_unused_parameters=False),
+        # strategy=DDPStrategy(find_unused_parameters=False),
         max_epochs=args.epochs,
         callbacks=callbacks,
         auto_scale_batch_size="binsearch" if args.auto_batch else None,

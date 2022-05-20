@@ -4,7 +4,7 @@ from torch.nn import functional as F
 import pytorch_lightning as pl
 from einops import rearrange
 
-from losses import DiceLoss
+from losses import DiceLoss, MC_CrossEntropy
 
 
 class Conv3dBlock(nn.Module):
@@ -217,8 +217,12 @@ class Unet3dModule(pl.LightningModule):
             1, self.hparams.in_chans, 3, 256, 256, device=self.device
         )
 
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
+        self.dice_loss = DiceLoss(include_background=False)
+        self.cross_entropy = MC_CrossEntropy(
+            weight=torch.tensor([0.05558904, 0.29847416, 0.31283098, 0.33310577])
+            if self.hparams.dataset in ["tecfidera", "techfideramri"]
+            else None,
+        )
 
     def forward(self, x):
         with torch.no_grad():
@@ -227,7 +231,7 @@ class Unet3dModule(pl.LightningModule):
         return x
 
     def step(self, batch, batch_indx=None):
-        input, target = batch
+        fname, input, target = batch
 
         if len(input.shape) == 5:
             input = rearrange(input, "b t c h w -> b c t h w")
@@ -255,28 +259,28 @@ class Unet3dModule(pl.LightningModule):
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
         loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
+        return loss_dict, fname, output
 
     def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict, output
 
     def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
     def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
+        fname, input, _ = batch
         return self(input)
 
     def configure_optimizers(self):

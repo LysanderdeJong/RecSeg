@@ -11,6 +11,19 @@ from losses import DiceLoss
 from model.cirim import CIRIMModule
 from model.unet import LamdaUnetModule
 
+# temp
+import wandb
+import os
+
+
+def retrieve_checkpoint(
+    model_id, project="techfidera-recseg", epoch="best", download_dir=None
+):
+    api = wandb.Api()
+    artifact_path = os.path.join("lysander", project, f"model-{model_id}:{epoch}")
+    artifact = api.artifact(artifact_path, type="model")
+    return artifact.get_path("model.ckpt").download(root=download_dir)
+
 
 class RecSegModule(pl.LightningModule):
     def __init__(
@@ -22,6 +35,15 @@ class RecSegModule(pl.LightningModule):
         self.cirim = CIRIMModule(**kwargs)
         self.lambdaunet = LamdaUnetModule(**kwargs)
 
+        # self.cirim.load_state_dict(
+        #     torch.load(retrieve_checkpoint(model_id="1pn2ol98", epoch="v39"))[
+        #         "state_dict"
+        #     ]
+        # )
+        # self.lambdaunet.load_state_dict(
+        #     torch.load(retrieve_checkpoint(model_id="3s7arbgg"))["state_dict"]
+        # )
+
         self.example_input_array = [
             torch.rand(3, 32, 320, 320, 2),  # kspace
             torch.rand(3, 32, 320, 320, 2),  # sesitivity maps
@@ -32,7 +54,9 @@ class RecSegModule(pl.LightningModule):
 
     def forward(self, y, sensitivity_maps, mask, init_pred, target):
         recons = self.cirim.forward(y, sensitivity_maps, mask, init_pred, target)
-        x = rearrange(torch.view_as_real(recons[-1][-1].detach()), "b h w c -> b c h w")
+        x = rearrange(
+            torch.view_as_real(recons[-1][-1].clone().detach()), "b h w c -> b c h w"
+        )
         x = F.group_norm(x, num_groups=1)
         seg = self.lambdaunet.forward(x)
         return recons, seg
@@ -75,15 +99,15 @@ class RecSegModule(pl.LightningModule):
             "psnr": FM.psnr(output.unsqueeze(-3), target.unsqueeze(-3)),
             "ssim": FM.ssim(output.unsqueeze(-3), target.unsqueeze(-3)),
             "cross_entropy": self.lambdaunet.cross_entropy(
-                pred_seg, torch.argmax(segmentation, dim=1).long()
+                pred_seg, segmentation.argmax(1)
             ),
         }
         dice_loss, dice_score = self.lambdaunet.dice_loss(pred_seg, segmentation)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
         loss_dict["loss"] = (
-            0.001 * (loss_dict["cross_entropy"] + loss_dict["dice_loss"])
-            + 0.999 * loss_dict["l1"]
+            1e-5 * (loss_dict["cross_entropy"] + loss_dict["dice_loss"])
+            + (1 - 1e-5) * loss_dict["l1"]
         )
         return loss_dict, preds_recon, pred_seg
 
@@ -103,7 +127,7 @@ class RecSegModule(pl.LightningModule):
         loss_dict, output_recon, output_seg = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
-        return loss_dict
+        return loss_dict, output_recon, output_seg
 
     def predict_step(self, batch, batch_idx, dataloader_idx):
         input, _ = batch
@@ -273,6 +297,10 @@ class RecSegModule(pl.LightningModule):
             default=3,
             type=int,
             help="Numer of slices to process simultaneously.",
+        )
+
+        parser.add_argument(
+            "--mc_samples", default=1, type=int, help="Number MC samples to take.",
         )
 
         # training params (opt)

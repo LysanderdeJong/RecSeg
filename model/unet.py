@@ -2,9 +2,15 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
+from torchmetrics import functional as FM
 from einops import rearrange
 
-from losses import DiceLoss
+from losses import (
+    DiceLoss,
+    MC_CrossEntropy,
+    hausdorf_distance,
+    average_surface_distance,
+)
 
 from model.lambda_layer import LambdaBlock
 
@@ -215,8 +221,12 @@ class UnetModule(pl.LightningModule):
             1, self.hparams.in_chans, 256, 256, device=self.device
         )
 
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
+        self.dice_loss = DiceLoss(include_background=False)
+        self.cross_entropy = MC_CrossEntropy(
+            weight=torch.tensor([0.05558904, 0.29847416, 0.31283098, 0.33310577])
+            if self.hparams.dataset in ["tecfidera", "techfideramri"]
+            else None,
+        )
 
     def forward(self, x):
         with torch.no_grad():
@@ -225,7 +235,7 @@ class UnetModule(pl.LightningModule):
         return x
 
     def step(self, batch, batch_indx=None):
-        input, target = batch
+        fname, input, target = batch
 
         if len(input.shape) == 5:
             input = rearrange(input, "b t c h w -> (b t) c h w")
@@ -238,39 +248,151 @@ class UnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
-            )
-        }
+        loss_dict = self.calculate_metrics(output, target, important_only=True)
+        return loss_dict, fname, output
 
-        dice_loss, dice_score = self.dice_loss(output, target)
+    def calculate_metrics(self, preds, target, important_only=True):
+        pred_label = torch.softmax(preds, dim=1).argmax(1)
+        target_label = target.argmax(1)
+
+        loss_dict = {"cross_entropy": self.cross_entropy(preds, target_label)}
+        dice_loss, dice_score = self.dice_loss(preds, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
+
+        if not important_only:
+            dice_per_class = FM.dice_score(
+                torch.softmax(preds, dim=1), target_label, bg=True, reduction="none"
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"dice_{label}"] = dice_per_class[i]
+
+            loss_dict["f1_micro"] = FM.fbeta(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["f1_macro"] = FM.fbeta(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["f1_weighted"] = FM.fbeta(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            f1_per_class = FM.fbeta(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"f1_{label}"] = f1_per_class[i]
+
+            loss_dict["precision_micro"] = FM.precision(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["precision_macro"] = FM.precision(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["precision_weighted"] = FM.precision(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            precision_per_class = FM.precision(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"precision_{label}"] = precision_per_class[i]
+
+            loss_dict["recall_micro"] = FM.recall(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["recall_macro"] = FM.recall(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["recall_weighted"] = FM.recall(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            recall_per_class = FM.recall(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"recall_{label}"] = recall_per_class[i]
+
+            loss_dict["hausdorff_distance"] = hausdorf_distance(
+                preds, target, include_background=False
+            )
+            loss_dict["average_surface_distance"] = average_surface_distance(
+                preds, target, include_background=False
+            )
+
         loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
+        return loss_dict
 
     def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict, output
 
     def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
+    def predict_step(self, batch, batch_idx):
+        loss_dict, fname, segmentation = self.step(batch, batch_idx)
+        return loss_dict, fname, segmentation.detach().cpu()
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -344,8 +466,13 @@ class LamdaUnetModule(pl.LightningModule):
             3, self.hparams.in_chans, 256, 256, device=self.device
         )
 
-        self.dice_loss = DiceLoss()
-        self.cross_entropy = nn.CrossEntropyLoss()
+        self.dice_loss = DiceLoss(include_background=False)
+        self.cross_entropy = MC_CrossEntropy(
+            self.hparams.mc_samples,
+            weight=torch.tensor([0.05558904, 0.29847416, 0.31283098, 0.33310577])
+            if self.hparams.dataset in ["tecfidera", "techfideramri"]
+            else None,
+        )
 
     def forward(self, x):
         with torch.no_grad():
@@ -354,7 +481,7 @@ class LamdaUnetModule(pl.LightningModule):
         return x
 
     def step(self, batch, batch_indx=None):
-        input, target = batch
+        fname, input, target = batch
 
         if len(input.shape) == 5:
             input = rearrange(input, "b t c h w -> (b t) c h w")
@@ -367,39 +494,162 @@ class LamdaUnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
+        loss_dict = {}
+        if output.shape[1] == target.shape[1] * 2:
+            mean, log_var = output.chunk(2, 1)
+            dice_loss, dice_score = self.dice_loss(mean, target)
+            loss_dict["dice_loss"] = dice_loss.mean()
+            loss_dict["dice_score"] = dice_score.detach()
+            loss_dict["mc_cross_entropy"] = self.cross_entropy(
+                mean, torch.argmax(target, dim=1).long(), log_var
             )
-        }
+            loss_dict["loss"] = loss_dict["mc_cross_entropy"] + loss_dict["dice_loss"]
+        else:
+            loss_dict = self.calculate_metrics(output, target, important_only=False)
+        return loss_dict, fname, output
 
-        dice_loss, dice_score = self.dice_loss(output, target)
+    def calculate_metrics(self, preds, target, important_only=True):
+        pred_label = torch.softmax(preds, dim=1).argmax(1)
+        target_label = target.argmax(1)
+
+        loss_dict = {"cross_entropy": self.cross_entropy(preds, target_label)}
+        dice_loss, dice_score = self.dice_loss(preds, target)
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
+
+        if not important_only:
+            dice_per_class = FM.dice_score(
+                torch.softmax(preds, dim=1), target_label, bg=True, reduction="none"
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"dice_{label}"] = dice_per_class[i]
+
+            loss_dict["f1_micro"] = FM.fbeta(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["f1_macro"] = FM.fbeta(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["f1_weighted"] = FM.fbeta(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            f1_per_class = FM.fbeta(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"f1_{label}"] = f1_per_class[i]
+
+            loss_dict["precision_micro"] = FM.precision(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["precision_macro"] = FM.precision(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["precision_weighted"] = FM.precision(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            precision_per_class = FM.precision(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"precision_{label}"] = precision_per_class[i]
+
+            loss_dict["recall_micro"] = FM.recall(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["recall_macro"] = FM.recall(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["recall_weighted"] = FM.recall(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            recall_per_class = FM.recall(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"recall_{label}"] = recall_per_class[i]
+
+            loss_dict["hausdorff_distance"] = hausdorf_distance(
+                preds, target, include_background=False
+            )
+            loss_dict["average_surface_distance"] = average_surface_distance(
+                preds, target, include_background=False
+            )
+
         loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
-        return loss_dict, output
+        return loss_dict
 
     def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
 
     def validation_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"val_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict, output
 
     def test_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
+    def predict_step(self, batch, batch_idx):
+        loss_dict, fname, segmentation = self.step(batch, batch_idx)
+        return loss_dict, fname, segmentation[0].unsqueeze(0).detach().cpu()
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -446,6 +696,10 @@ class LamdaUnetModule(pl.LightningModule):
             default=3,
             type=int,
             help="Numer of slices to process simultaneously.",
+        )
+
+        parser.add_argument(
+            "--mc_samples", default=50, type=int, help="Number MC samples to take.",
         )
 
         # training params (opt)

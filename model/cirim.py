@@ -172,7 +172,7 @@ class CIRIM(nn.Module):
 
         cascades_loss = []
         for cascade_eta in eta:
-            time_steps_loss = [
+            time_step_loss = [
                 _loss_fn(
                     torch.abs(
                         time_step_eta / torch.abs(time_step_eta).amax((-1, -2), True)
@@ -181,15 +181,14 @@ class CIRIM(nn.Module):
                 )
                 for time_step_eta in cascade_eta
             ]
-            _loss = [
-                x
-                * torch.logspace(
-                    -1, 0, steps=self.time_steps, device=time_steps_loss[0].device
-                )
-                for x in time_steps_loss
-            ]
-            cascades_loss.append(sum(sum(_loss) / len(eta[-1])))
-        return sum(list(cascades_loss)) / len(eta)
+            time_step_loss_stack = torch.stack(time_step_loss)
+            loss_weights = torch.logspace(
+                -1, 0, steps=len(time_step_loss), device=time_step_loss_stack.device
+            )
+            cascades_loss.append(
+                sum(time_step_loss_stack * loss_weights) / len(time_step_loss)
+            )
+        return sum(cascades_loss) / len(cascades_loss)
 
 
 class CIRIMModule(pl.LightningModule):
@@ -315,8 +314,8 @@ class CIRIMModule(pl.LightningModule):
         return loss_dict, output
 
     def test_step(self, batch, batch_idx):
-        fname = batch[-3]
-        slice_num = batch[-2]
+        fname = batch[5]
+        slice_num = batch[6]
         loss_dict, output = self.step(batch, batch_idx)
         if isinstance(output, list):
             output = output[-1]
@@ -340,11 +339,13 @@ class CIRIMModule(pl.LightningModule):
     #         with h5py.File(out_dir / fname, "w") as hf:
     #             hf.create_dataset("reconstruction", data=recons)
 
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        y, sensitivity_maps, mask, init_pred, target, fname, slice_num, _ = batch
-        y, mask, _ = self.model.process_input(y, mask)
-        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
-        return preds[-1][-1]
+    def predict_step(self, batch, batch_idx):
+        fname = batch[5]
+        slice_num = batch[6]
+        loss_dict, output = self.step(batch, batch_idx)
+        if isinstance(output, list):
+            output = [i.unsqueeze(0).detach().cpu() for j in output for i in j]
+        return loss_dict, (fname, slice_num, output)
 
     def fold(self, tensor):
         shape = list(tensor.shape[1:])
