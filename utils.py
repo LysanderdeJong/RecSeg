@@ -12,6 +12,7 @@ from dataloader import (
 )
 
 from model.unet import UnetModule, LamdaUnetModule
+from model.unetrecon import UnetReconModule
 from model.vnet import VnetModule
 from model.deeplab import DeepLabModule
 from model.unet3d import Unet3dModule
@@ -41,6 +42,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
     if parser and args:
         if args.model == "unet":
             parser = UnetModule.add_model_specific_args(parser)
+        elif args.model == "unetrecon":
+            parser = UnetReconModule.add_model_specific_args(parser)
         elif args.model == "lambdaunet":
             parser = LamdaUnetModule.add_model_specific_args(parser)
         elif args.model == "vnet":
@@ -63,6 +66,8 @@ def get_model(parser=None, args=None, model=None, **kwargs):
     elif model:
         if model == "unet":
             return UnetModule(**kwargs)
+        elif model == "unetrecon":
+            return UnetReconModule(**kwargs)
         elif model == "lambdaunet":
             return LamdaUnetModule(**kwargs)
         elif model == "vnet":

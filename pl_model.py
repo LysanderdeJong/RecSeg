@@ -54,9 +54,7 @@ class RecSegModule(pl.LightningModule):
 
     def forward(self, y, sensitivity_maps, mask, init_pred, target):
         recons = self.cirim.forward(y, sensitivity_maps, mask, init_pred, target)
-        x = rearrange(
-            torch.view_as_real(recons[-1][-1].clone().detach()), "b h w c -> b c h w"
-        )
+        x = rearrange(torch.view_as_real(recons[-1][-1]), "b h w c -> b c h w")
         x = F.group_norm(x, num_groups=1)
         seg = self.lambdaunet.forward(x)
         return recons, seg
@@ -106,8 +104,8 @@ class RecSegModule(pl.LightningModule):
         loss_dict["dice_loss"] = dice_loss.mean()
         loss_dict["dice_score"] = dice_score.detach()
         loss_dict["loss"] = (
-            1e-5 * (loss_dict["cross_entropy"] + loss_dict["dice_loss"])
-            + (1 - 1e-5) * loss_dict["l1"]
+            1e-3 * (loss_dict["cross_entropy"] + loss_dict["dice_loss"])
+            + (1 - 1e-3) * loss_dict["l1"]
         )
         return loss_dict, preds_recon, pred_seg
 

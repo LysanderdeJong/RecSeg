@@ -1,5 +1,4 @@
-import collections
-from email.policy import strict
+from collections import defaultdict
 import os
 import h5py
 import jsonargparse
@@ -62,16 +61,10 @@ def setup(args):
     dict_args = vars(args)
     # Create dataloaders
     pl_loader = get_dataset(**dict_args)
-    test_dataset = pl_loader._make_dataset(
+    dataset = pl_loader._make_dataset(
         "all", pl_loader.file_split if hasattr(pl_loader, "file_split") else None
     )
-    # test_dataset = torch.utils.data.Subset(test_dataset, list(range(100)))
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        shuffle=False,
-        num_workers=12,
-        # sampler=MC_Sampler(test_dataset, mc_samples=10),
-    )
+
     # Create model
     model = get_model(**dict_args)
 
@@ -85,225 +78,235 @@ def setup(args):
     if checkpoint_path:
         model.load_state_dict(
             torch.load(checkpoint_path, map_location=model.device)["state_dict"],
-            # strict=False,
+            strict=False,
+        )
+    evalutaion_pipeline = Evaluate(args, trainer, model, dataset)
+    evalutaion_pipeline.predict_loop()
+    print(args.out_dir)
+    return evalutaion_pipeline.get_metrics()
+
+
+class Evaluate:
+    def __init__(self, args, trainer, model, dataset):
+        self.args = args
+        self.trainer = trainer
+        self.model = model
+
+        dataset = torch.utils.data.Subset(
+            dataset, list(range(int(len(dataset) * args.test_limit)))
+        )
+        self.loader = torch.utils.data.DataLoader(
+            dataset,
+            shuffle=False,
+            num_workers=12,
+            sampler=MC_Sequential_Sampler(dataset, mc_samples=args.mc_samples),
         )
 
-    out_dir = args.out_dir
+    def predict_loop(self):
+        self.data_dict = defaultdict(lambda: defaultdict(list))
+        self.tmp_metric_dict = defaultdict(lambda: defaultdict(list))
+        self.metric_dict = defaultdict(lambda: defaultdict(list))
+        with torch.cuda.device(self.args.gpus[0]):
+            with torch.no_grad():
+                self.model.eval()
+                if self.args.mc_samples > 1:
+                    self.enable_dropout()
+                self.model.cuda()
 
-    if args.dataset == "tecfideramri":
-        # predict_recon(args, trainer, model, test_loader, out_dir)
-        predict_uncertainty(args, trainer, model, test_loader, out_dir)
-        # predict_mc(args, trainer, model, test_loader, out_dir)
-    elif args.dataset == "tecfidera":
-        predict_seg(args, trainer, model, test_loader, out_dir)
-    else:
-        raise NotImplementedError
+                self.tmp_data_dict = defaultdict(lambda: defaultdict(list))
+                prev_fname = "DMF007_T2_AXFLAIR_coronal.h5"
+                for idx, batch in enumerate(tqdm(self.loader)):
+                    batch = self.move_to_gpu(batch)
+                    if (idx + 1) % self.args.mc_samples:
+                        self.disable_dropout()
 
+                    if self.args.eval_mode == "recon":
+                        fname, slice_int = self.proces_recon(batch, idx)
+                    elif self.args.eval_mode == "segmentation":
+                        fname, slice_int = self.proces_segmentation(batch, idx)
+                    elif self.args.eval_mode == "srs":
+                        raise NotImplementedError
+                        # fname, slice_int = self.proces_srs(prediction, idx)
+                    else:
+                        raise NotImplementedError
 
-def predict_recon(args, trainer, model, loader, out_dir):
-    reconstructions = collections.defaultdict(lambda: collections.defaultdict(list))
-    metric_dict = collections.defaultdict(lambda: collections.defaultdict(list))
-    predictions = trainer.predict(model, dataloaders=loader, return_predictions=True,)
+                    if (idx + 1) % self.args.mc_samples == 0:
+                        for fname, tmp_data in self.tmp_data_dict.items():
+                            for data_tag, data_list in tmp_data.items():
+                                if len(data_list) > 1:
+                                    self.data_dict[fname][data_tag].append(
+                                        (
+                                            slice_int,
+                                            np.std(np.stack(data_list, axis=0), axis=0),
+                                        )
+                                    )
+                                else:
+                                    self.data_dict[fname][data_tag].append(
+                                        (slice_int, np.stack(data_list, axis=0))
+                                    )
 
-    for loss_dict, (fname, slice_int, pred) in predictions:
-        fname = fname[0]
-        reconstructions[fname]["reconstruction"].append(
-            (slice_int, pred[-1].squeeze().numpy())
-        )
-        for metric, value in loss_dict.items():
-            metric_dict[fname][metric].append(value.detach().mean().numpy())
+                        for fname, metric_list_dict in self.tmp_metric_dict.items():
+                            for metric, value in metric_list_dict.items():
+                                self.metric_dict[fname][metric].append(
+                                    np.mean(np.ma.masked_invalid(value))
+                                )
+                                if self.args.mc_samples > 1:
+                                    self.metric_dict[fname][f"{metric}_std"].append(
+                                        np.std(np.ma.masked_invalid(value))
+                                    )
 
-    for fname in reconstructions:
-        reconstructions[fname]["reconstruction"] = np.stack(
-            [out for _, out in sorted(reconstructions[fname]["reconstruction"])]
-        )
+                        self.tmp_data_dict = defaultdict(lambda: defaultdict(list))
+                        self.tmp_metric_dict = defaultdict(lambda: defaultdict(list))
+                        self.enable_dropout()
 
-    save_h5(out_dir=out_dir, data_dict=reconstructions, metric_dict=metric_dict)
-    get_metrics(input_dir=out_dir)
-
-
-@torch.no_grad()
-def predict_recon_v2(args, trainer, model, loader, out_dir):
-    reconstructions = collections.defaultdict(lambda: collections.defaultdict(list))
-    metric_dict = collections.defaultdict(lambda: collections.defaultdict(list))
-    predictions = []
-    with torch.cuda.device(args.gpus[0]):
-        model.eval()
-        model.cuda()
-
-        for idx, batch in enumerate(tqdm(loader)):
-            # print(torch.max(batch[0][0]))
-            for k, item in enumerate(batch):
-                if isinstance(item, torch.Tensor):
-                    batch[k] = item.cuda()
-                elif isinstance(item, (list, tuple)):
-                    for j, c in enumerate(item):
-                        if isinstance(c, torch.Tensor):
-                            batch[k][j] = c.cuda()
-
-            output = model.predict_step(batch, idx)
-            predictions.append(output)
-
-    for loss_dict, (fname, slice_int, pred) in predictions:
-        fname = fname[0]
-        # pred = (
-        #     (torch.abs(pred[-1]) / torch.abs(pred[-1]).amax()).squeeze().cpu().numpy()
-        # )
-        pred = pred[-1].squeeze().cpu().numpy()
-        reconstructions[fname]["reconstruction"].append((slice_int, pred))
-        for metric, value in loss_dict.items():
-            metric_dict[fname][metric].append(value.detach().mean().cpu().numpy())
-
-    for fname in reconstructions:
-        reconstructions[fname]["reconstruction"] = np.stack(
-            [out for _, out in sorted(reconstructions[fname]["reconstruction"])]
-        )
-
-    save_h5(out_dir=out_dir, data_dict=reconstructions, metric_dict=metric_dict)
-    get_metrics(input_dir=out_dir)
-
-
-def predict_seg(args, trainer, model, loader, out_dir):
-    segmentations = collections.defaultdict(lambda: collections.defaultdict(list))
-    metric_dict = collections.defaultdict(lambda: collections.defaultdict(list))
-    predictions = trainer.predict(model, dataloaders=loader, return_predictions=True,)
-
-    for loss_dict, (fname, slice_int), pred in predictions:
-        fname = fname[0]
-        segmentations[fname]["segmentation"].append((slice_int, pred.squeeze().numpy()))
-        for metric, value in loss_dict.items():
-            metric_dict[fname][metric].append(value.detach().mean().numpy())
-
-    for fname in segmentations:
-        segmentations[fname]["segmentation"] = np.stack(
-            [out for _, out in sorted(segmentations[fname]["segmentation"])],
-        )
-
-    save_h5(out_dir=out_dir, data_dict=segmentations, metric_dict=metric_dict)
-    get_metrics(input_dir=out_dir)
-
-
-def save_h5(out_dir, data_dict, metric_dict):
-    print(out_dir)
-    for fname, recons in data_dict.items():
-        with h5py.File(os.path.join(out_dir, fname), "w") as hf:
-            for data_key, data in recons.items():
-                hf.create_dataset(data_key, data=data)
-            for metric, metric_list in metric_dict[fname].items():
-                hf.attrs[metric] = np.array(metric_list)
-
-
-def predict_uncertainty(args, trainer, model, loader, out_dir):
-    uncertainty = collections.defaultdict(lambda: collections.defaultdict(list))
-    metric_dict = collections.defaultdict(lambda: collections.defaultdict(list))
-    predictions = trainer.predict(model, dataloaders=loader, return_predictions=True,)
-    for loss_dict, (fname, slice_int, pred) in predictions:
-        fname = fname[0]
-        pred_stack = torch.stack(pred, dim=0)
-        pred_stack = torch.abs(pred_stack) / torch.abs(pred_stack).amax((-1, -2), True)
-        un_stack = torch.sqrt(
-            torch.square(pred_stack - pred_stack[-1]).sum(0) / pred_stack.shape[0]
-        )
-        uncertainty[fname]["uncertainty"].append(
-            (slice_int, un_stack.squeeze().numpy())
-        )
-        for metric, value in loss_dict.items():
-            metric_dict[fname][metric].append(value.numpy())
-
-    for fname in uncertainty:
-        uncertainty[fname]["uncertainty"] = np.stack(
-            [out for _, out in sorted(uncertainty[fname]["uncertainty"])]
-        )
-
-    save_h5(
-        out_dir=out_dir, data_dict=uncertainty, metric_dict=metric_dict,
-    )
-
-
-def predict_mc(args, trainer, model, loader, out_dir, mc_samples=10):
-    uncertainty = collections.defaultdict(lambda: collections.defaultdict(list))
-    tmp_dict = collections.defaultdict(lambda: collections.defaultdict(list))
-    metric_dict = collections.defaultdict(lambda: collections.defaultdict(list))
-    with torch.cuda.device(args.gpus[0]):
-        with torch.no_grad():
-            model.eval()
-            enable_dropout(model)
-            model.cuda()
-
-            tmp = []
-            for idx, batch in enumerate(tqdm(loader)):
-                for k, item in enumerate(batch):
-                    if isinstance(item, torch.Tensor):
-                        batch[k] = item.cuda()
-                    elif isinstance(item, (list, tuple)):
-                        for j, c in enumerate(item):
-                            if isinstance(c, torch.Tensor):
-                                batch[k][j] = c.cuda()
-
-                prediction = model.predict_step(batch, idx)
-                loss_dict, (fname, slice_int, pred) = prediction
-                fname = fname[0]
-                # print(idx, slice_int, fname)
-                if torch.is_complex(pred[-1]):
-                    pred = [torch.abs(i) for i in pred]
-                tmp.append(
-                    (pred[-1] / pred[-1].amax((-1, -2), True)).squeeze().cpu().numpy()
+                    if prev_fname != fname:
+                        for fname, data_label in self.data_dict.items():
+                            for data_label in self.data_dict[fname].keys():
+                                self.data_dict[fname][data_label] = np.stack(
+                                    [
+                                        np.squeeze(out)
+                                        for _, out in sorted(
+                                            self.data_dict[fname][data_label]
+                                        )
+                                    ]
+                                )
+                        self.save_h5(
+                            data_dict=self.data_dict, metric_dict=self.metric_dict
+                        )
+                        self.data_dict = defaultdict(lambda: defaultdict(list))
+                        self.metric_dict = defaultdict(lambda: defaultdict(list))
+                    prev_fname = fname
+        for fname, data_label in self.data_dict.items():
+            for data_label in self.data_dict[fname].keys():
+                self.data_dict[fname][data_label] = np.stack(
+                    [
+                        np.squeeze(out)
+                        for _, out in sorted(self.data_dict[fname][data_label])
+                    ]
                 )
-                for metric, value in loss_dict.items():
-                    tmp_dict[fname][metric].append(value.cpu().numpy())
+        self.save_h5(data_dict=self.data_dict, metric_dict=self.metric_dict)
 
-                if (idx + 1) % mc_samples == 0 and idx > 0:
-                    uncertainty[fname]["mc_sample_variance"].append(
-                        (slice_int, np.std(np.stack(tmp, axis=0), axis=0))
-                    )
-                    for fname, metric_list_dict in tmp_dict.items():
-                        for metric, value in metric_list_dict.items():
-                            metric_dict[fname][metric].append(np.mean(value))
-                            metric_dict[fname][f"{metric}_std"].append(np.std(value))
-                    tmp = []
-                    tmp_dict = collections.defaultdict(
-                        lambda: collections.defaultdict(list)
-                    )
+    def proces_recon(self, batch, idx):
+        prediction = self.model.predict_step(batch, idx)
+        loss_dict, (fname, slice_int, pred) = prediction
+        fname = fname[0]
+        if torch.is_complex(pred[-1]):
+            pred = [torch.abs(i) for i in pred]
 
-    for fname in uncertainty:
-        uncertainty[fname]["mc_sample_variance"] = np.stack(
-            [out for _, out in sorted(uncertainty[fname]["mc_sample_variance"])]
+        uncertainty = pred[-1].clone()
+        self.tmp_data_dict[fname]["aleatoric_uncertainty"].append(
+            (uncertainty / uncertainty.amax((-1, -2), True)).squeeze().cpu().numpy()
         )
 
-    save_h5(
-        out_dir=out_dir, data_dict=uncertainty, metric_dict=metric_dict,
-    )
+        if (idx + 1) % self.args.mc_samples == 0:
+            recon = pred[-1].clone()
+            self.tmp_data_dict[fname]["reconstruction"].append(
+                recon.squeeze().cpu().numpy()
+            )
 
+            gt = batch[4].clone()
+            self.tmp_data_dict[fname]["ground_truth"].append(gt.squeeze().cpu().numpy())
 
-def get_metrics(input_dir):
-    results = {}
-    files = sorted(os.listdir(input_dir))
-    for f in files:
-        input_path = os.path.join(input_dir, f)
-        hf = h5py.File(input_path)
-        hf_attr = dict(hf.attrs)
+            recon = pred[-1].clone()
+            recon = (recon / recon.amax((-1, -2), True)).squeeze()
+            gt = batch[4].clone()
+            gt = (gt / gt.amax((-1, -2), True)).squeeze()
+            self.tmp_data_dict[fname]["difference_error"].append(
+                torch.abs(recon - gt.cpu()).cpu().numpy()
+            )
 
-        for key, value in hf_attr.items():
-            if key not in results:
-                results[key] = list(value)
+            if len(pred) <= 8:
+                pred_stack = torch.stack(pred, dim=0)
             else:
-                results[key].extend(list(value))
+                pred_stack = torch.stack(pred[8:], dim=0)
+            pred_stack = torch.abs(pred_stack) / torch.abs(pred_stack).amax(
+                (-1, -2), True
+            )
+            un_stack = torch.sqrt(
+                torch.square(pred_stack - pred_stack[-1]).sum(0) / pred_stack.shape[0]
+            )
+            self.tmp_data_dict[fname]["intermediate_std"].append(
+                un_stack.squeeze().cpu().numpy()
+            )
 
-    for key, value in results.items():
-        print(f"{key}: \t {np.nanmean(np.ma.masked_invalid(np.array(value)))}")
-    print("---------")
+        for metric, value in loss_dict.items():
+            self.tmp_metric_dict[fname][metric].append(value.cpu().numpy())
+        return fname, slice_int
 
-    return results
+    def proces_segmentation(self, batch, idx):
+        prediction = self.model.predict_step(batch, idx)
+        loss_dict, (fname, slice_int), pred = prediction
+        fname = fname[0]
+
+        self.tmp_data_dict[fname]["epistemic_uncertainty"].append(
+            torch.softmax(pred, dim=1).squeeze().cpu().numpy()
+        )
+
+        if (idx + 1) % self.args.mc_samples == 0:
+            self.tmp_data_dict[fname]["segmentation"].append(
+                pred.squeeze().cpu().numpy()
+            )
+
+            self.tmp_data_dict[fname]["ground_truth"].append(
+                batch[-1].squeeze().cpu().numpy()
+            )
+
+            self.tmp_data_dict[fname]["difference_error"].append(batch[-1].cpu() - pred)
+
+        for metric, value in loss_dict.items():
+            self.tmp_metric_dict[fname][metric].append(value.cpu().numpy())
+        return fname, slice_int
+
+    def move_to_gpu(self, batch):
+        for k, item in enumerate(batch):
+            if isinstance(item, torch.Tensor):
+                batch[k] = item.cuda()
+            elif isinstance(item, (list, tuple)):
+                for j, c in enumerate(item):
+                    if isinstance(c, torch.Tensor):
+                        batch[k][j] = c.cuda()
+        return batch
+
+    def save_h5(self, data_dict, metric_dict):
+        for fname, recons in data_dict.items():
+            with h5py.File(os.path.join(self.args.out_dir, fname), "w") as hf:
+                for data_key, data in recons.items():
+                    hf.create_dataset(data_key, data=data)
+                for metric, metric_list in metric_dict[fname].items():
+                    hf.attrs[metric] = np.array(metric_list)
+
+    def get_metrics(self):
+        results = {}
+        files = sorted(os.listdir(self.args.out_dir))
+        for f in files:
+            input_path = os.path.join(self.args.out_dir, f)
+            hf = h5py.File(input_path)
+            hf_attr = dict(hf.attrs)
+
+            for key, value in hf_attr.items():
+                if key not in results:
+                    results[key] = list(value)
+                else:
+                    results[key].extend(list(value))
+
+        for key, value in results.items():
+            print(f"{key}: \t {np.nanmean(np.ma.masked_invalid(np.array(value)))}")
+        print("---------")
+        return results
+
+    def enable_dropout(self):
+        for each_module in self.model.modules():
+            if each_module.__class__.__name__.startswith("Dropout"):
+                each_module.train()
+
+    def disable_dropout(self):
+        for each_module in self.model.modules():
+            if each_module.__class__.__name__.startswith("Dropout"):
+                each_module.eval()
 
 
-def enable_dropout(m):
-    for each_module in m.modules():
-        if each_module.__class__.__name__.startswith("Dropout"):
-            each_module.train()
-
-
-class MC_Sampler(torch.utils.data.sampler.Sampler):
-    def __init__(self, data_source, mc_samples=50) -> None:
+class MC_Sequential_Sampler(torch.utils.data.sampler.Sampler):
+    def __init__(self, data_source, mc_samples=1) -> None:
         self.dataset = data_source
         self.mc_samples = mc_samples
 
@@ -371,6 +374,18 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--out_dir", default=None, type=str, help="Path to save the results",
+    )
+
+    parser.add_argument(
+        "--eval_mode",
+        default=None,
+        type=str,
+        choices=["recon", "segmentation", "srs"],
+        help="Path to save the results",
+    )
+
+    parser.add_argument(
+        "--mc_samples", default=1, type=int, help="Path to save the results",
     )
 
     # other hyperparameters

@@ -153,7 +153,7 @@ class CIRIM(nn.Module):
         return pred
 
     @staticmethod
-    def process_input(y, mask):
+    def process_inputs(y, mask):
         """Process the inputs to the network."""
         if isinstance(y, list):
             r = np.random.randint(len(y))
@@ -275,7 +275,7 @@ class CIRIMModule(pl.LightningModule):
             acc,
             segmentation,
         ) = batch
-        y, mask, _ = self.model.process_input(y, mask)
+        y, mask, _ = self.model.process_inputs(y, mask)
 
         y = self.fold(y)
         sensitivity_maps = self.fold(sensitivity_maps)

@@ -248,7 +248,7 @@ class UnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = self.calculate_metrics(output, target, important_only=True)
+        loss_dict = self.calculate_metrics(output, target, important_only=False)
         return loss_dict, fname, output
 
     def calculate_metrics(self, preds, target, important_only=True):
@@ -468,7 +468,7 @@ class LamdaUnetModule(pl.LightningModule):
 
         self.dice_loss = DiceLoss(include_background=False)
         self.cross_entropy = MC_CrossEntropy(
-            self.hparams.mc_samples,
+            self.hparams.aleatoric_samples,
             weight=torch.tensor([0.05558904, 0.29847416, 0.31283098, 0.33310577])
             if self.hparams.dataset in ["tecfidera", "techfideramri"]
             else None,
@@ -699,7 +699,10 @@ class LamdaUnetModule(pl.LightningModule):
         )
 
         parser.add_argument(
-            "--mc_samples", default=50, type=int, help="Number MC samples to take.",
+            "--aleatoric_samples",
+            default=1,
+            type=int,
+            help="Number MC samples to take.",
         )
 
         # training params (opt)

@@ -84,7 +84,7 @@ def train(args):
         default_root_dir=args.log_dir,
         auto_select_gpus=True,
         gpus=None if args.gpus == "None" else args.gpus,
-        # strategy=DDPStrategy(find_unused_parameters=False),
+        strategy=DDPStrategy(find_unused_parameters=False),
         max_epochs=args.epochs,
         callbacks=callbacks,
         auto_scale_batch_size="binsearch" if args.auto_batch else None,
