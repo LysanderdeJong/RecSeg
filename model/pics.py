@@ -5,20 +5,23 @@ import numpy as np
 import pytorch_lightning as pl
 from torchmetrics import functional as FM
 
+try:
+    import bart
+except Exception:
+    pass
+
 from mridc.collections.common.parts.fft import ifft2c
 from mridc.collections.common.parts.utils import coil_combination
 from mridc.collections.reconstruction.models.base import BaseSensitivityModel
-from mridc.collections.reconstruction.models.unet_base.unet_block import NormUnet
 from mridc.collections.reconstruction.parts.utils import center_crop_to_smallest
 
 
-class UNetRecon(nn.Module):
+class PICS(nn.Module):
     def __init__(
         self,
-        channels=64,
-        num_pools=2,
-        padding_size=11,
-        normalize=True,
+        reg_wt=0.005,
+        num_iters=60,
+        device="cuda",
         use_sense_net=False,
         sens_chans=8,
         sens_pools=4,
@@ -28,15 +31,10 @@ class UNetRecon(nn.Module):
     ):
         super().__init__()
 
+        self.reg_wt = reg_wt
+        self.num_iters = num_iters
+        self._device = device
         self.fft_type = fft_type
-
-        self.unet = NormUnet(
-            chans=channels,
-            num_pools=num_pools,
-            padding_size=padding_size,
-            normalize=normalize,
-        )
-
         self.output_type = output_type
 
         # Initialize the sensitivity network if use_sens_net is True
@@ -49,8 +47,6 @@ class UNetRecon(nn.Module):
                 mask_type=sens_mask_type,
             )
 
-        self.accumulate_estimates = False
-
     @staticmethod
     def process_inputs(y, mask):
         if isinstance(y, list):
@@ -62,31 +58,36 @@ class UNetRecon(nn.Module):
         return y, mask, r
 
     def forward(
-        self, y, sensitivity_maps, mask, init_pred, target,
+        self, y, sensitivity_maps, mask, target,
     ):
         sensitivity_maps = (
             self.sens_net(y, mask) if self.use_sens_net else sensitivity_maps
         )
-        eta = torch.view_as_complex(
-            coil_combination(
-                ifft2c(y, fft_type=self.fft_type),
+        eta = torch.zeros_like(torch.from_numpy(sensitivity_maps))
+        if "cuda" in str(self._device):
+            eta = bart.bart(
+                1,
+                f"pics -d0 -g -S -R W:7:0:{self.reg_wt} -i {self.num_iters}",
+                y,
                 sensitivity_maps,
-                method=self.output_type,
-                dim=1,
-            )
-        )
+            )[0]
+        else:
+            eta = bart.bart(
+                1,
+                f"pics -d0 -S -R W:7:0:{self.reg_wt} -i {self.num_iters}",
+                y,
+                sensitivity_maps,
+            )[0]
         _, eta = center_crop_to_smallest(target, eta)
-        return torch.view_as_complex(
-            self.unet(torch.view_as_real(eta.unsqueeze(1)))
-        ).squeeze(1)
+        return eta
 
 
-class UnetReconModule(pl.LightningModule):
+class PICSModule(pl.LightningModule):
     def __init__(
         self,
-        channels=64,
-        num_pools=2,
-        padding_size=11,
+        reg_wt=0.005,
+        num_iters=60,
+        device_str="cuda",
         use_sense_net=False,
         sens_chans=8,
         sens_pools=4,
@@ -103,30 +104,29 @@ class UnetReconModule(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
 
-        self.model = UNetRecon(
-            channels=self.hparams.channels,
-            num_pools=self.hparams.num_pools,
-            padding_size=self.hparams.padding_size,
+        self.model = PICS(
+            reg_wt=self.hparams.reg_wt,
+            num_iters=self.hparams.num_iters,
+            device=self.hparams.device_str,
             use_sense_net=self.hparams.use_sense_net,
             sens_chans=self.hparams.sens_chans,
             sens_pools=self.hparams.sens_pools,
             sens_mask_type=self.hparams.sens_mask_type,
-            output_type=self.hparams.output_type,
             fft_type=self.hparams.fft_type,
+            output_type="SENSE",
         )
         self.example_input_array = [
             torch.rand(1, 32, 320, 320, 2),  # kspace
             torch.rand(1, 32, 320, 320, 2),  # sesitivity maps
             torch.rand(1, 1, 320, 320, 1),  # mask
-            torch.rand(1, 320, 320, 2),  # initial prediction
             torch.rand(1, 320, 320, 2),  # target
         ]
 
     def forward(
-        self, y, sensitivity_maps, mask, init_pred, target,
+        self, y, sensitivity_maps, mask, target,
     ):
 
-        return self.model(y, sensitivity_maps, mask, init_pred, target)
+        return self.model(y, sensitivity_maps, mask, target)
 
     def step(self, batch, batch_indx=None):
         (
@@ -147,14 +147,32 @@ class UnetReconModule(pl.LightningModule):
         mask = self.fold(mask)
         target = self.fold(target)
 
-        preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
+        y = torch.view_as_complex(y)
+        # if self.hparams.fft_type != "orthogonal":
+        #     y = torch.fft.fftshift(y, dim=(-2, -1))
+        y = y.permute(0, 2, 3, 1).detach().cpu().numpy()
 
-        # if torch.any(torch.isnan(preds[-1][-1])):
-        #     print(preds[-1][-1])
-        #     raise ValueError
+        if sensitivity_maps is None and not self.sens_net:
+            raise ValueError(
+                "Sensitivity maps are required for PICS. "
+                "Please set use_sens_net to True if you precomputed sensitivity maps are not available."
+            )
+
+        sensitivity_maps = torch.view_as_complex(sensitivity_maps)
+        if self.hparams.fft_type != "orthogonal":
+            sensitivity_maps = torch.fft.fftshift(sensitivity_maps, dim=(-2, -1))
+        sensitivity_maps = sensitivity_maps.permute(0, 2, 3, 1).detach().cpu().numpy()  # type: ignore
+
+        preds = torch.from_numpy(
+            self.forward(y, sensitivity_maps, mask, target)
+        ).unsqueeze(0)
+        if self.hparams.fft_type != "orthogonal":
+            preds = torch.fft.fftshift(preds, dim=(-2, -1))
 
         output = torch.abs(preds) / torch.abs(preds).amax((-1, -2), True)
         target = torch.abs(target) / torch.abs(target).amax((-1, -2), True)
+
+        target = target.to(output.device)
 
         loss_dict = {
             "loss": F.l1_loss(output.unsqueeze(-3), target.unsqueeze(-3)),
@@ -232,20 +250,23 @@ class UnetReconModule(pl.LightningModule):
 
     @staticmethod
     def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("UnetReconModel")
+        parser = parent_parser.add_argument_group("PICSmodel")
 
         # network params
         parser.add_argument(
-            "--channels",
-            default=64,
+            "--reg_wt", type=float, default=0.005, help="Regularization strenght",
+        )
+        parser.add_argument(
+            "--num_iters",
             type=int,
-            help="Number of top-level U-Net filters.",
+            default=60,
+            help="Number of iterationts do PCIS reconstruction.",
         )
         parser.add_argument(
-            "--num_pools", default=2, type=int, help="Number of U-Net pooling layers.",
-        )
-        parser.add_argument(
-            "--padding_size", default=11, type=int, help="Size of the padding applied",
+            "--device_str",
+            type=str,
+            default="cuda",
+            help="Device on which to perform the reconstruction.",
         )
 
         parser.add_argument(
@@ -272,12 +293,7 @@ class UnetReconModule(pl.LightningModule):
             default="2D",
             help="Type of mask to use for the sensitivity net",
         )
-        parser.add_argument(
-            "--output_type",
-            choices=["SENSE", "RSS"],
-            default="SENSE",
-            help="Type of output to use",
-        )
+
         parser.add_argument(
             "--fft_type", type=str, default="normal", help="Type of FFT to use"
         )

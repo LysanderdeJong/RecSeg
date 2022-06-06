@@ -248,12 +248,14 @@ class TecFidera(Dataset):
         split,
         data_files,
         data_root="/data/projects/tecfidera/data/h5_recon_dataset/",
+        seg_root=None,
         seq_len=1,
         use_cache=True,
         compact_masks=True,
     ):
         self.split = split
         self.data_root = data_root
+        self.seg_root = data_root if seg_root is None else seg_root
         self.seq_len = seq_len
         self.compact_masks = compact_masks
         self.input_transform = transforms.Resize([256, 256], antialias=True,)
@@ -282,12 +284,17 @@ class TecFidera(Dataset):
             print("Generating cache file.")
 
             for file_name in file_names:
-                mri_path = os.path.join(data_root, file_name)
+                mri_path = os.path.join(self.data_root, file_name)
+                seg_path = os.path.join(self.seg_root, file_name)
 
                 mri = h5py.File(mri_path, "r")
+                seg = h5py.File(seg_path, "r")
 
-                mri_shape = mri["reconstruction_sense"].shape[0]
-                mask_shape = mri["segmentation"].shape[0]
+                try:
+                    mri_shape = mri["reconstruction"].shape[0]
+                except Exception:
+                    mri_shape = mri["reconstruction_sense"].shape[0]
+                mask_shape = seg["segmentation"].shape[0]
 
                 mri_num_slices = mri_shape - self.seq_len + 1
                 mask_num_slices = mask_shape - self.seq_len + 1
@@ -316,11 +323,19 @@ class TecFidera(Dataset):
 
         # print(h5py.File(fmri, "r")["reconstruction_sense"].shape)
 
-        mri = np.array(
-            h5py.File(fmri, "r")["reconstruction_sense"][
-                mri_slice : mri_slice + self.seq_len, ...
-            ]
-        )
+        try:
+            mri = np.array(
+                h5py.File(fmri, "r")["reconstruction_sense"][
+                    mri_slice : mri_slice + self.seq_len, ...
+                ]
+            )
+        except Exception:
+            mri = np.array(
+                h5py.File(fmri, "r")["reconstruction"][
+                    mri_slice : mri_slice + self.seq_len, ...
+                ]
+            )
+
         mask = np.array(
             h5py.File(fmask, "r")["segmentation"][
                 mask_slice : mask_slice + self.seq_len, ...
@@ -435,6 +450,15 @@ class MRISliceDataset(FastMRISliceDataset):
 
         sample_rate = 1 if sample_rate is None else sample_rate
 
+        if isinstance(root, (list, tuple)):
+            files = root.copy()
+            root = "/".join(files[0].split("/")[:-1])
+            files = [Path(i) for i in files]
+        elif isinstance(root, str):
+            files = list(Path(root).iterdir())
+        else:
+            raise ValueError("Root is not a valid directory or file list.")
+
         super().__init__(
             root=root,
             challenge=challenge,
@@ -483,10 +507,9 @@ class MRISliceDataset(FastMRISliceDataset):
         # check if our dataset is in the cache
         # if there, use that metadata, if not, then regenerate the metadata
         if dataset_cache.get(root) is None or not use_dataset_cache:
-            files = list(Path(root).iterdir())
             for fname in sorted(files):
                 metadata, num_slices = self._retrieve_metadata(fname)
-                num_slices -= self.seq_len + 1
+                num_slices += -self.seq_len + 1
                 self.examples += [
                     (fname, slice_ind, metadata) for slice_ind in range(num_slices)
                 ]
@@ -610,7 +633,7 @@ class MRISliceDataset(FastMRISliceDataset):
                 segmentation = torch.Tensor([])
 
             attrs = dict(hf.attrs)
-            attrs.update(metadata)
+            attrs |= metadata
 
         if sensitivity_map.shape != kspace.shape:
             sensitivity_map = np.transpose(sensitivity_map, (2, 0, 1))

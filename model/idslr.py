@@ -1,4 +1,5 @@
 import math
+from multiprocessing.sharedctypes import RawArray
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -8,8 +9,13 @@ from torchmetrics import functional as FM
 from einops import rearrange
 
 from mridc.collections.common.parts.fft import fft2c, ifft2c
-from mridc.collections.common.parts.utils import rss_complex
-from losses import DiceLoss, MC_CrossEntropy
+from mridc.collections.common.parts.utils import rss_complex, complex_mul, complex_conj
+from losses import (
+    DiceLoss,
+    MC_CrossEntropy,
+    average_surface_distance,
+    hausdorf_distance,
+)
 
 from model.unet import ConvBlock, TransposeConvBlock
 
@@ -275,8 +281,17 @@ class idlsr(nn.Module):
         self.num_iters = num_iters
         self.fft_type = fft_type
 
-    def forward(self, masked_kpace, mask=None):
+    def forward(self, masked_kpace, sensitivity_map=None, mask=None):
         preds = []
+        # if sensitivity_map:
+        #     masked_kpace = complex_mul(
+        #         ifft2c(masked_kpace, fft_type=self.fft_type),
+        #         complex_conj(sensitivity_map),
+        #     ).sum(1)
+        # else:
+        #     masked_kpace = rss_complex(
+        #         ifft2c(masked_kpace, fft_type=self.fft_type), dim=1
+        #     )
         for encoder, decoder, dc in zip(self.encoders, self.decoders, self.dc):
             tmp = []
             for _ in range(self.num_iters):
@@ -376,7 +391,7 @@ class IDSLRModule(pl.LightningModule):
         target = self.fold(target)
         segmentation = self.fold(segmentation)
 
-        pred_image, pred_seg = self.forward(y, mask)
+        pred_image, pred_seg = self.forward(y, mask=mask)
 
         if torch.any(torch.isnan(pred_image[-1][-1])) or torch.any(
             torch.isnan(pred_seg)
@@ -389,21 +404,135 @@ class IDSLRModule(pl.LightningModule):
         target = torch.abs(target) / torch.abs(target).amax((-1, -2), True)
 
         # print(fname, pred_seg.shape, segmentation.shape)
-
-        loss_dict = {
-            "l2": self.calculate_loss(pred_image, target),
-            "psnr": FM.psnr(image.unsqueeze(-3), target.unsqueeze(-3)),
-            "ssim": FM.ssim(image.unsqueeze(-3), target.unsqueeze(-3)),
-            "cross_entropy": self.cross_entropy(pred_seg, segmentation.argmax(1)),
-        }
-
-        dice_loss, dice_score = self.dice_loss(pred_seg, segmentation)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
+        loss_dict = self.calculate_metrics(pred_seg, segmentation, important_only=False)
+        loss_dict["l2"] = self.calculate_loss(pred_image, target)
+        loss_dict["psnr"] = FM.psnr(image.unsqueeze(-3), target.unsqueeze(-3))
+        loss_dict["ssim"] = FM.ssim(image.unsqueeze(-3), target.unsqueeze(-3))
         loss_dict["loss"] = (1 - 1e-5) * loss_dict["l2"] + 1e-5 * loss_dict[
             "cross_entropy"
         ]
         return loss_dict, pred_image, pred_seg
+
+    def calculate_metrics(self, preds, target, important_only=True):
+        pred_label = torch.softmax(preds, dim=1).argmax(1)
+        target_label = target.argmax(1)
+
+        loss_dict = {"cross_entropy": self.cross_entropy(preds, target_label)}
+        dice_loss, dice_score = self.dice_loss(preds, target)
+        loss_dict["dice_loss"] = dice_loss.mean()
+        loss_dict["dice_score"] = dice_score.detach()
+
+        if not important_only:
+            dice_per_class = FM.dice_score(
+                torch.softmax(preds, dim=1), target_label, bg=True, reduction="none"
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"dice_{label}"] = dice_per_class[i]
+
+            loss_dict["f1_micro"] = FM.fbeta(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["f1_macro"] = FM.fbeta(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["f1_weighted"] = FM.fbeta(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            f1_per_class = FM.fbeta(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"f1_{label}"] = f1_per_class[i]
+
+            loss_dict["precision_micro"] = FM.precision(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["precision_macro"] = FM.precision(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["precision_weighted"] = FM.precision(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            precision_per_class = FM.precision(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"precision_{label}"] = precision_per_class[i]
+
+            loss_dict["recall_micro"] = FM.recall(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["recall_macro"] = FM.recall(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["recall_weighted"] = FM.recall(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            recall_per_class = FM.recall(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            for i, label in enumerate(
+                ["background", "graymatter", "whitematter", "lesion"]
+            ):
+                loss_dict[f"recall_{label}"] = recall_per_class[i]
+
+            loss_dict["hausdorff_distance"] = hausdorf_distance(
+                preds, target, include_background=False
+            )
+            loss_dict["average_surface_distance"] = average_surface_distance(
+                preds, target, include_background=False
+            )
+
+        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
+        return loss_dict
 
     def training_step(self, batch, batch_idx):
         loss_dict, output_recon, output_seg = self.step(batch, batch_idx)
@@ -422,6 +551,21 @@ class IDSLRModule(pl.LightningModule):
         for metric, value in loss_dict.items():
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
+
+    def predict_step(self, batch, batch_idx):
+        fname = batch[5]
+        slice_num = batch[6]
+        loss_dict, output_recon, output_seg = self.step(batch, batch_idx)
+        if isinstance(output_recon, list):
+            output_recon = [
+                i.unsqueeze(0).detach().cpu() for j in output_recon for i in j
+            ]
+        return (
+            loss_dict,
+            (fname, slice_num),
+            output_recon,
+            output_seg.detach().cpu(),
+        )
 
     @staticmethod
     def process_input(y, mask):
@@ -460,10 +604,6 @@ class IDSLRModule(pl.LightningModule):
         shape = list(tensor.shape[1:])
         shape[0] = -1
         return tensor.view(shape)
-
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -535,7 +675,7 @@ class IDSLRModule(pl.LightningModule):
         )
 
         parser.add_argument(
-            "--fft_type", type=str, default="backward", help="Type of FFT to use"
+            "--fft_type", type=str, default="normal", help="Type of FFT to use"
         )
 
         # training params (opt)

@@ -71,7 +71,7 @@ class RecSegModule(pl.LightningModule):
             acc,
             segmentation,
         ) = batch
-        y, mask, _ = self.cirim.model.process_input(y, mask)
+        y, mask, _ = self.cirim.model.process_inputs(y, mask)
 
         y = self.cirim.fold(y)
         sensitivity_maps = self.cirim.fold(sensitivity_maps)
@@ -92,17 +92,12 @@ class RecSegModule(pl.LightningModule):
         output = output / output.amax((-1, -2), True)
         target = torch.abs(target) / torch.abs(target).amax((-1, -2), True)
 
-        loss_dict = {
-            "l1": loss,
-            "psnr": FM.psnr(output.unsqueeze(-3), target.unsqueeze(-3)),
-            "ssim": FM.ssim(output.unsqueeze(-3), target.unsqueeze(-3)),
-            "cross_entropy": self.lambdaunet.cross_entropy(
-                pred_seg, segmentation.argmax(1)
-            ),
-        }
-        dice_loss, dice_score = self.lambdaunet.dice_loss(pred_seg, segmentation)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
+        loss_dict = self.lambdaunet.calculate_metrics(
+            pred_seg, segmentation, important_only=False
+        )
+        loss_dict["l1"] = loss
+        loss_dict["psnr"] = FM.psnr(output.unsqueeze(-3), target.unsqueeze(-3))
+        loss_dict["ssim"] = FM.ssim(output.unsqueeze(-3), target.unsqueeze(-3))
         loss_dict["loss"] = (
             1e-3 * (loss_dict["cross_entropy"] + loss_dict["dice_loss"])
             + (1 - 1e-3) * loss_dict["l1"]
@@ -127,9 +122,22 @@ class RecSegModule(pl.LightningModule):
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict, output_recon, output_seg
 
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        input, _ = batch
-        return self(input)
+    def predict_step(self, batch, batch_idx):
+        fname = batch[5]
+        slice_num = batch[6]
+        loss_dict, output_recon, output_seg = self.step(batch, batch_idx)
+        if isinstance(output_recon, list):
+            output_recon = [
+                i[0].unsqueeze(0).unsqueeze(0).detach().cpu()
+                for j in output_recon
+                for i in j
+            ]
+        return (
+            loss_dict,
+            (fname, slice_num),
+            output_recon,
+            output_seg[0].unsqueeze(0).detach().cpu(),
+        )
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -266,7 +274,7 @@ class RecSegModule(pl.LightningModule):
             help="Type of output to use",
         )
         parser.add_argument(
-            "--fft_type", type=str, default="backward", help="Type of FFT to use"
+            "--fft_type", type=str, default="normal", help="Type of FFT to use"
         )
 
         # network params
@@ -298,7 +306,10 @@ class RecSegModule(pl.LightningModule):
         )
 
         parser.add_argument(
-            "--mc_samples", default=1, type=int, help="Number MC samples to take.",
+            "--aleatoric_samples",
+            default=1,
+            type=int,
+            help="Number MC samples to take.",
         )
 
         # training params (opt)

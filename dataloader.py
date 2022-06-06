@@ -308,6 +308,7 @@ class TecFideraDataModule(pl.LightningDataModule):
             split,
             data_files,
             self.hparams.data_root,
+            self.hparams.seg_root,
             self.hparams.seq_len,
             self.hparams.use_cache,
             self.hparams.compact_masks,
@@ -363,6 +364,9 @@ class TecFideraDataModule(pl.LightningDataModule):
             help="Path to the data root",
         )
         parser.add_argument(
+            "--seg_root", default=None, type=str, help="Path to the segmentations root",
+        )
+        parser.add_argument(
             "--seq_len", default=1, type=int, help="Size of the slice looked at."
         )
         parser.add_argument(
@@ -404,10 +408,22 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
     ):
         super().__init__()
         self.save_hyperparameters()
+        test_set = [
+            "DMF008_T2_AXFLAIR_transverse.h5",
+            "DMF047_T0_AXFLAIR_transverse.h5",
+            "DMF063_T0_AXFLAIR_coronal.h5",
+            "DMF043_T0_AXFLAIR_coronal.h5",
+            "DMF028_T0_AXFLAIR_sagittal.h5",
+            "DMF037_T0_AXFLAIR_sagittal.h5",
+        ]
+        self.data_split = {
+            "all": [os.path.join(data_root, i) for i in sorted(os.listdir(data_root))],
+            "test": [os.path.join(data_root, i) for i in test_set],
+        }
 
     def _make_dataset(self, split="all", data_files=None):
         return MRISliceDataset(
-            root=self.hparams.data_root,
+            root=self.hparams.data_root if data_files is None else data_files,
             challenge=self.hparams.challenge,
             sample_rate=self.hparams.sample_rate,
             mask_type=self.hparams.mask_type,
@@ -428,7 +444,7 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
-            dataset = self._make_dataset()
+            dataset = self._make_dataset(data_files=self.data_split["all"])
             self.train, self.val = random_split(
                 dataset,
                 [
@@ -436,9 +452,8 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
                     len(dataset) - (int(self.hparams.train_fraction * len(dataset))),
                 ],
             )
-            self.val, self.test = random_split(
-                self.val, [len(self.val) // 2, len(self.val) - len(self.val) // 2]
-            )
+        if stage == "test":
+            self.test = self._make_dataset(data_files=self.data_split["test"])
 
     def train_dataloader(self):
         return DataLoader(
@@ -544,7 +559,7 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
         )
         parser.add_argument(
             "--fft_type_data",
-            default="backward",
+            default="normal",
             type=str,
             help="The type of fft normilization to use.",
         )
@@ -575,7 +590,7 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
 
         parser.add_argument(
             "--train_fraction",
-            default=0.85,
+            default=0.9,
             type=float,
             help="Fraction of the data used for training.",
         )

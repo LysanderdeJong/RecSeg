@@ -20,6 +20,8 @@ from model.attunet import AttUnetModule
 from model.cirim import CIRIMModule
 from model.idslr import IDSLRModule
 from pl_model import RecSegModule
+from model.pics import PICSModule
+from model.zf import ZFModule
 
 
 def segmentation_volume_to_img(seg):
@@ -60,6 +62,10 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             parser = RecSegModule.add_model_specific_args(parser)
         elif args.model == "idslr":
             parser = IDSLRModule.add_model_specific_args(parser)
+        elif args.model == "pics":
+            parser = PICSModule.add_model_specific_args(parser)
+        elif args.model == "zf":
+            parser = ZFModule.add_model_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -84,6 +90,10 @@ def get_model(parser=None, args=None, model=None, **kwargs):
             return RecSegModule(**kwargs)
         elif model == "idslr":
             return IDSLRModule(**kwargs)
+        elif model == "pics":
+            return PICSModule(**kwargs)
+        elif model == "zf":
+            return ZFModule(**kwargs)
         else:
             raise NotImplementedError
     else:

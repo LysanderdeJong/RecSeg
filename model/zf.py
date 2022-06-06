@@ -8,36 +8,23 @@ from torchmetrics import functional as FM
 from mridc.collections.common.parts.fft import ifft2c
 from mridc.collections.common.parts.utils import coil_combination
 from mridc.collections.reconstruction.models.base import BaseSensitivityModel
-from mridc.collections.reconstruction.models.unet_base.unet_block import NormUnet
 from mridc.collections.reconstruction.parts.utils import center_crop_to_smallest
 
 
-class UNetRecon(nn.Module):
+class ZF(nn.Module):
     def __init__(
         self,
-        channels=64,
-        num_pools=2,
-        padding_size=11,
-        normalize=True,
+        zf_method="SENSE",
         use_sense_net=False,
         sens_chans=8,
         sens_pools=4,
         sens_mask_type="2D",
-        output_type="SENSE",
         fft_type="orthogonal",
     ):
         super().__init__()
 
         self.fft_type = fft_type
-
-        self.unet = NormUnet(
-            chans=channels,
-            num_pools=num_pools,
-            padding_size=padding_size,
-            normalize=normalize,
-        )
-
-        self.output_type = output_type
+        self.zf_method = zf_method
 
         # Initialize the sensitivity network if use_sens_net is True
         self.use_sens_net = use_sense_net
@@ -48,8 +35,6 @@ class UNetRecon(nn.Module):
                 fft_type=self.fft_type,
                 mask_type=sens_mask_type,
             )
-
-        self.accumulate_estimates = False
 
     @staticmethod
     def process_inputs(y, mask):
@@ -67,31 +52,25 @@ class UNetRecon(nn.Module):
         sensitivity_maps = (
             self.sens_net(y, mask) if self.use_sens_net else sensitivity_maps
         )
-        eta = torch.view_as_complex(
-            coil_combination(
-                ifft2c(y, fft_type=self.fft_type),
-                sensitivity_maps,
-                method=self.output_type,
-                dim=1,
-            )
+        eta = coil_combination(
+            ifft2c(y, fft_type=self.fft_type),
+            sensitivity_maps,
+            method=self.zf_method.upper(),
+            dim=1,
         )
+        eta = torch.view_as_complex(eta)
         _, eta = center_crop_to_smallest(target, eta)
-        return torch.view_as_complex(
-            self.unet(torch.view_as_real(eta.unsqueeze(1)))
-        ).squeeze(1)
+        return eta
 
 
-class UnetReconModule(pl.LightningModule):
+class ZFModule(pl.LightningModule):
     def __init__(
         self,
-        channels=64,
-        num_pools=2,
-        padding_size=11,
+        zf_method="SENSE",
         use_sense_net=False,
         sens_chans=8,
         sens_pools=4,
         sens_mask_type="2D",
-        output_type="SENSE",
         fft_type="orthogonal",
         lr=0.001,
         weight_decay=0.0,
@@ -103,15 +82,12 @@ class UnetReconModule(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
 
-        self.model = UNetRecon(
-            channels=self.hparams.channels,
-            num_pools=self.hparams.num_pools,
-            padding_size=self.hparams.padding_size,
+        self.model = ZF(
+            zf_method=self.hparams.zf_method,
             use_sense_net=self.hparams.use_sense_net,
             sens_chans=self.hparams.sens_chans,
             sens_pools=self.hparams.sens_pools,
             sens_mask_type=self.hparams.sens_mask_type,
-            output_type=self.hparams.output_type,
             fft_type=self.hparams.fft_type,
         )
         self.example_input_array = [
@@ -148,6 +124,8 @@ class UnetReconModule(pl.LightningModule):
         target = self.fold(target)
 
         preds = self.forward(y, sensitivity_maps, mask, init_pred, target)
+        # preds = preds / torch.abs(preds).amax((-1, -2), True)
+        # print(torch.abs(preds).max(), torch.abs(target).max())
 
         # if torch.any(torch.isnan(preds[-1][-1])):
         #     print(preds[-1][-1])
@@ -201,8 +179,9 @@ class UnetReconModule(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         fname = batch[5]
         slice_num = batch[6]
+        max_value = batch[7][-1][0]
         loss_dict, output = self.step(batch, batch_idx)
-        output = output.unsqueeze(0).detach().cpu()
+        output = (output * max_value).unsqueeze(0).detach().cpu()
         return loss_dict, (fname, slice_num, output)
 
     def fold(self, tensor):
@@ -232,22 +211,15 @@ class UnetReconModule(pl.LightningModule):
 
     @staticmethod
     def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("UnetReconModel")
+        parser = parent_parser.add_argument_group("ZFModel")
 
         # network params
         parser.add_argument(
-            "--channels",
-            default=64,
-            type=int,
-            help="Number of top-level U-Net filters.",
+            "--zf_method",
+            choices=["SENSE", "RSS"],
+            default="SENSE",
+            help="Type of output to use",
         )
-        parser.add_argument(
-            "--num_pools", default=2, type=int, help="Number of U-Net pooling layers.",
-        )
-        parser.add_argument(
-            "--padding_size", default=11, type=int, help="Size of the padding applied",
-        )
-
         parser.add_argument(
             "--use_sens_net",
             action="store_true",
@@ -272,12 +244,7 @@ class UnetReconModule(pl.LightningModule):
             default="2D",
             help="Type of mask to use for the sensitivity net",
         )
-        parser.add_argument(
-            "--output_type",
-            choices=["SENSE", "RSS"],
-            default="SENSE",
-            help="Type of output to use",
-        )
+
         parser.add_argument(
             "--fft_type", type=str, default="normal", help="Type of FFT to use"
         )

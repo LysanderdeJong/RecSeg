@@ -342,9 +342,12 @@ class CIRIMModule(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         fname = batch[5]
         slice_num = batch[6]
+        max_value = batch[7][-1][0]
         loss_dict, output = self.step(batch, batch_idx)
         if isinstance(output, list):
-            output = [i.unsqueeze(0).detach().cpu() for j in output for i in j]
+            output = [
+                (i * max_value).unsqueeze(0).detach().cpu() for j in output for i in j
+            ]
         return loss_dict, (fname, slice_num, output)
 
     def fold(self, tensor):
@@ -492,7 +495,7 @@ class CIRIMModule(pl.LightningModule):
             help="Type of output to use",
         )
         parser.add_argument(
-            "--fft_type", type=str, default="backward", help="Type of FFT to use"
+            "--fft_type", type=str, default="normal", help="Type of FFT to use"
         )
 
         # training params (opt)

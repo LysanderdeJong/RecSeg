@@ -5,17 +5,11 @@ import jsonargparse
 import torch
 import numpy as np
 import pytorch_lightning as pl
+from tqdm import tqdm
 from pytorch_lightning.callbacks import ModelSummary
 from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.plugins import DDPPlugin
-
-from pytorch_lightning.profiler import PyTorchProfiler
-from model.cirim import CIRIMModule
 
 from utils import parse_known_args, get_dataset, get_model, retrieve_checkpoint
-
-from tqdm import tqdm
 
 
 def setup(args):
@@ -40,7 +34,7 @@ def setup(args):
     trainer = pl.Trainer(
         default_root_dir=args.log_dir,
         auto_select_gpus=True,
-        gpus=None if args.gpus == "None" else args.gpus,
+        gpus=args.gpus,
         max_epochs=args.epochs,
         callbacks=callbacks,
         auto_scale_batch_size="binsearch" if args.auto_batch else None,
@@ -61,9 +55,16 @@ def setup(args):
     dict_args = vars(args)
     # Create dataloaders
     pl_loader = get_dataset(**dict_args)
+
     dataset = pl_loader._make_dataset(
         "all", pl_loader.file_split if hasattr(pl_loader, "file_split") else None
     )
+    if args.dataset == "tecfideramri":
+        dataset = pl_loader._make_dataset(data_files=pl_loader.data_split["test"])
+    else:
+        dataset = pl_loader._make_dataset(
+            "all", pl_loader.file_split if hasattr(pl_loader, "file_split") else None
+        )
 
     # Create model
     model = get_model(**dict_args)
@@ -106,76 +107,77 @@ class Evaluate:
         self.data_dict = defaultdict(lambda: defaultdict(list))
         self.tmp_metric_dict = defaultdict(lambda: defaultdict(list))
         self.metric_dict = defaultdict(lambda: defaultdict(list))
-        with torch.cuda.device(self.args.gpus[0]):
-            with torch.no_grad():
-                self.model.eval()
-                if self.args.mc_samples > 1:
+        device = torch.device(f"cuda:{self.args.gpus[0]}") if self.args.gpus else "cpu"
+        # with torch.cuda.device(self.args.gpus[0]):
+        with torch.no_grad():
+            self.model.eval()
+            if self.args.mc_samples > 1:
+                self.enable_dropout()
+            self.model.to(device)
+
+            self.tmp_data_dict = defaultdict(lambda: defaultdict(list))
+            prev_fname = "DMF008_T2_AXFLAIR_transverse.h5"
+            for idx, batch in enumerate(tqdm(self.loader)):
+                batch = self.move_to_gpu(batch, device)
+                if (idx + 1) % self.args.mc_samples:
+                    self.disable_dropout()
+
+                if self.args.eval_mode == "recon":
+                    fname, slice_int = self.proces_recon(batch, idx)
+                elif self.args.eval_mode == "segmentation":
+                    fname, slice_int = self.proces_segmentation(batch, idx)
+                elif self.args.eval_mode == "srs":
+                    fname, slice_int = self.proces_srs(batch, idx)
+                else:
+                    raise NotImplementedError
+
+                if (idx + 1) % self.args.mc_samples == 0:
+                    for fname, tmp_data in self.tmp_data_dict.items():
+                        for data_tag, data_list in tmp_data.items():
+                            if len(data_list) > 1:
+                                self.data_dict[fname][data_tag].append(
+                                    (
+                                        slice_int,
+                                        np.std(np.stack(data_list, axis=0), axis=0),
+                                    )
+                                )
+                            else:
+                                self.data_dict[fname][data_tag].append(
+                                    (slice_int, np.stack(data_list, axis=0))
+                                )
+
+                    for fname, metric_list_dict in self.tmp_metric_dict.items():
+                        for metric, value in metric_list_dict.items():
+                            self.metric_dict[fname][metric].append(
+                                np.mean(np.ma.masked_invalid(value))
+                            )
+                            if self.args.mc_samples > 1:
+                                self.metric_dict[fname][f"{metric}_std"].append(
+                                    np.std(np.ma.masked_invalid(value))
+                                )
+
+                    self.tmp_data_dict = defaultdict(lambda: defaultdict(list))
+                    self.tmp_metric_dict = defaultdict(lambda: defaultdict(list))
                     self.enable_dropout()
-                self.model.cuda()
 
-                self.tmp_data_dict = defaultdict(lambda: defaultdict(list))
-                prev_fname = "DMF007_T2_AXFLAIR_coronal.h5"
-                for idx, batch in enumerate(tqdm(self.loader)):
-                    batch = self.move_to_gpu(batch)
-                    if (idx + 1) % self.args.mc_samples:
-                        self.disable_dropout()
-
-                    if self.args.eval_mode == "recon":
-                        fname, slice_int = self.proces_recon(batch, idx)
-                    elif self.args.eval_mode == "segmentation":
-                        fname, slice_int = self.proces_segmentation(batch, idx)
-                    elif self.args.eval_mode == "srs":
-                        raise NotImplementedError
-                        # fname, slice_int = self.proces_srs(prediction, idx)
-                    else:
-                        raise NotImplementedError
-
-                    if (idx + 1) % self.args.mc_samples == 0:
-                        for fname, tmp_data in self.tmp_data_dict.items():
-                            for data_tag, data_list in tmp_data.items():
-                                if len(data_list) > 1:
-                                    self.data_dict[fname][data_tag].append(
-                                        (
-                                            slice_int,
-                                            np.std(np.stack(data_list, axis=0), axis=0),
-                                        )
-                                    )
-                                else:
-                                    self.data_dict[fname][data_tag].append(
-                                        (slice_int, np.stack(data_list, axis=0))
-                                    )
-
-                        for fname, metric_list_dict in self.tmp_metric_dict.items():
-                            for metric, value in metric_list_dict.items():
-                                self.metric_dict[fname][metric].append(
-                                    np.mean(np.ma.masked_invalid(value))
+                if prev_fname != fname:
+                    for data_label in self.data_dict[prev_fname].keys():
+                        self.data_dict[prev_fname][data_label] = np.stack(
+                            [
+                                np.squeeze(out)
+                                for _, out in sorted(
+                                    self.data_dict[prev_fname][data_label]
                                 )
-                                if self.args.mc_samples > 1:
-                                    self.metric_dict[fname][f"{metric}_std"].append(
-                                        np.std(np.ma.masked_invalid(value))
-                                    )
-
-                        self.tmp_data_dict = defaultdict(lambda: defaultdict(list))
-                        self.tmp_metric_dict = defaultdict(lambda: defaultdict(list))
-                        self.enable_dropout()
-
-                    if prev_fname != fname:
-                        for fname, data_label in self.data_dict.items():
-                            for data_label in self.data_dict[fname].keys():
-                                self.data_dict[fname][data_label] = np.stack(
-                                    [
-                                        np.squeeze(out)
-                                        for _, out in sorted(
-                                            self.data_dict[fname][data_label]
-                                        )
-                                    ]
-                                )
-                        self.save_h5(
-                            data_dict=self.data_dict, metric_dict=self.metric_dict
+                            ]
                         )
-                        self.data_dict = defaultdict(lambda: defaultdict(list))
-                        self.metric_dict = defaultdict(lambda: defaultdict(list))
-                    prev_fname = fname
+                    self.save_h5(
+                        data_dict=self.data_dict,
+                        metric_dict=self.metric_dict,
+                        key=prev_fname,
+                    )
+                    del self.data_dict[prev_fname]
+                    del self.metric_dict[prev_fname]
+                prev_fname = fname
         for fname, data_label in self.data_dict.items():
             for data_label in self.data_dict[fname].keys():
                 self.data_dict[fname][data_label] = np.stack(
@@ -190,13 +192,15 @@ class Evaluate:
         prediction = self.model.predict_step(batch, idx)
         loss_dict, (fname, slice_int, pred) = prediction
         fname = fname[0]
+        # print(pred.shape)
         if torch.is_complex(pred[-1]):
             pred = [torch.abs(i) for i in pred]
 
-        uncertainty = pred[-1].clone()
-        self.tmp_data_dict[fname]["aleatoric_uncertainty"].append(
-            (uncertainty / uncertainty.amax((-1, -2), True)).squeeze().cpu().numpy()
-        )
+        if self.args.mc_samples > 1:
+            uncertainty = pred[-1].clone()
+            self.tmp_data_dict[fname]["aleatoric_uncertainty"].append(
+                (uncertainty / uncertainty.amax((-1, -2), True)).squeeze().cpu().numpy()
+            )
 
         if (idx + 1) % self.args.mc_samples == 0:
             recon = pred[-1].clone()
@@ -215,19 +219,21 @@ class Evaluate:
                 torch.abs(recon - gt.cpu()).cpu().numpy()
             )
 
-            if len(pred) <= 8:
-                pred_stack = torch.stack(pred, dim=0)
-            else:
-                pred_stack = torch.stack(pred[8:], dim=0)
-            pred_stack = torch.abs(pred_stack) / torch.abs(pred_stack).amax(
-                (-1, -2), True
-            )
-            un_stack = torch.sqrt(
-                torch.square(pred_stack - pred_stack[-1]).sum(0) / pred_stack.shape[0]
-            )
-            self.tmp_data_dict[fname]["intermediate_std"].append(
-                un_stack.squeeze().cpu().numpy()
-            )
+            if len(pred) > 1:
+                if len(pred) <= 8:
+                    pred_stack = torch.stack(pred, dim=0)
+                else:
+                    pred_stack = torch.stack(pred[8:], dim=0)
+                pred_stack = torch.abs(pred_stack) / torch.abs(pred_stack).amax(
+                    (-1, -2), True
+                )
+                un_stack = torch.sqrt(
+                    torch.square(pred_stack - pred_stack[-1]).sum(0)
+                    / pred_stack.shape[0]
+                )
+                self.tmp_data_dict[fname]["intermediate_std"].append(
+                    un_stack.squeeze().cpu().numpy()
+                )
 
         for metric, value in loss_dict.items():
             self.tmp_metric_dict[fname][metric].append(value.cpu().numpy())
@@ -238,9 +244,10 @@ class Evaluate:
         loss_dict, (fname, slice_int), pred = prediction
         fname = fname[0]
 
-        self.tmp_data_dict[fname]["epistemic_uncertainty"].append(
-            torch.softmax(pred, dim=1).squeeze().cpu().numpy()
-        )
+        if self.args.mc_samples > 1:
+            self.tmp_data_dict[fname]["epistemic_uncertainty"].append(
+                torch.softmax(pred, dim=1).squeeze().cpu().numpy()
+            )
 
         if (idx + 1) % self.args.mc_samples == 0:
             self.tmp_data_dict[fname]["segmentation"].append(
@@ -257,23 +264,102 @@ class Evaluate:
             self.tmp_metric_dict[fname][metric].append(value.cpu().numpy())
         return fname, slice_int
 
-    def move_to_gpu(self, batch):
+    def proces_srs(self, batch, idx):
+        prediction = self.model.predict_step(batch, idx)
+        loss_dict, (fname, slice_int), pred_recon, pred_seg = prediction
+        fname = fname[0]
+        if torch.is_complex(pred_recon[-1]):
+            pred_recon = [torch.abs(i) for i in pred_recon]
+
+        if self.args.mc_samples > 1:
+            uncertainty = pred_recon[-1].clone()
+            self.tmp_data_dict[fname]["aleatoric_uncertainty"].append(
+                (uncertainty / uncertainty.amax((-1, -2), True)).squeeze().cpu().numpy()
+            )
+            self.tmp_data_dict[fname]["epistemic_uncertainty"].append(
+                torch.softmax(pred_seg, dim=1).squeeze().cpu().numpy()
+            )
+
+        if (idx + 1) % self.args.mc_samples == 0:
+            self.tmp_data_dict[fname]["segmentation"].append(
+                pred_seg.squeeze().cpu().numpy()
+            )
+
+            self.tmp_data_dict[fname]["ground_truth_seg"].append(
+                batch[-1].squeeze().cpu().numpy()
+            )
+
+            self.tmp_data_dict[fname]["difference_error_seg"].append(
+                batch[-1].cpu() - pred_seg
+            )
+
+            recon = pred_recon[-1].clone()
+            self.tmp_data_dict[fname]["reconstruction"].append(
+                recon.squeeze().cpu().numpy()
+            )
+
+            gt = batch[4].clone()
+            self.tmp_data_dict[fname]["ground_truth_recon"].append(
+                gt.squeeze().cpu().numpy()
+            )
+
+            recon = pred_recon[-1].clone()
+            recon = (recon / recon.amax((-1, -2), True)).squeeze()
+            gt = batch[4].clone()
+            gt = (gt / gt.amax((-1, -2), True)).squeeze()
+            self.tmp_data_dict[fname]["difference_error_recon"].append(
+                torch.abs(recon - gt.cpu()).cpu().numpy()
+            )
+
+            if len(pred_recon) > 1:
+                if len(pred_recon) <= 8:
+                    pred_stack = torch.stack(pred_recon, dim=0)
+                else:
+                    pred_stack = torch.stack(pred_recon[8:], dim=0)
+                pred_stack = torch.abs(pred_stack) / torch.abs(pred_stack).amax(
+                    (-1, -2), True
+                )
+                un_stack = torch.sqrt(
+                    torch.square(pred_stack - pred_stack[-1]).sum(0)
+                    / pred_stack.shape[0]
+                )
+                self.tmp_data_dict[fname]["intermediate_std"].append(
+                    un_stack.squeeze().cpu().numpy()
+                )
+
+        for metric, value in loss_dict.items():
+            self.tmp_metric_dict[fname][metric].append(value.mean().cpu().numpy())
+            # print(metric, value.cpu().numpy())
+        return fname, slice_int
+
+    def move_to_gpu(self, batch, device):
         for k, item in enumerate(batch):
             if isinstance(item, torch.Tensor):
-                batch[k] = item.cuda()
+                batch[k] = item.to(device)
             elif isinstance(item, (list, tuple)):
                 for j, c in enumerate(item):
                     if isinstance(c, torch.Tensor):
-                        batch[k][j] = c.cuda()
+                        batch[k][j] = c.to(device)
+                    elif isinstance(c, (list, tuple)):
+                        for l, d in enumerate(c):
+                            if isinstance(d, torch.Tensor):
+                                batch[k][j][l] = d.to(device)
         return batch
 
-    def save_h5(self, data_dict, metric_dict):
-        for fname, recons in data_dict.items():
-            with h5py.File(os.path.join(self.args.out_dir, fname), "w") as hf:
-                for data_key, data in recons.items():
+    def save_h5(self, data_dict, metric_dict, key=None):
+        if key in data_dict.keys():
+            with h5py.File(os.path.join(self.args.out_dir, key), "w") as hf:
+                for data_key, data in data_dict[key].items():
                     hf.create_dataset(data_key, data=data)
-                for metric, metric_list in metric_dict[fname].items():
+                for metric, metric_list in metric_dict[key].items():
                     hf.attrs[metric] = np.array(metric_list)
+        else:
+            for fname, recons in data_dict.items():
+                with h5py.File(os.path.join(self.args.out_dir, fname), "w") as hf:
+                    for data_key, data in recons.items():
+                        hf.create_dataset(data_key, data=data)
+                    for metric, metric_list in metric_dict[fname].items():
+                        hf.attrs[metric] = np.array(metric_list)
 
     def get_metrics(self):
         results = {}
@@ -358,7 +444,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--gpus", nargs="+", default=[0], type=int, help="Which gpus to use."
+        "--gpus", nargs="+", default=None, type=int, help="Which gpus to use."
     )
 
     parser.add_argument(
@@ -385,12 +471,12 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--mc_samples", default=1, type=int, help="Path to save the results",
+        "--mc_samples", default=1, type=int, help="Number of MC dropout samples.",
     )
 
     # other hyperparameters
     parser.add_argument(
-        "--seed", default=None, type=int, help="Seed to use for reproducing results"
+        "--seed", default=42, type=int, help="Seed to use for reproducing results"
     )
     parser.add_argument(
         "--log_dir",
