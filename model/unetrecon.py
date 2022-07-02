@@ -115,11 +115,11 @@ class UnetReconModule(pl.LightningModule):
             fft_type=self.hparams.fft_type,
         )
         self.example_input_array = [
-            torch.rand(1, 32, 320, 320, 2),  # kspace
-            torch.rand(1, 32, 320, 320, 2),  # sesitivity maps
-            torch.rand(1, 1, 320, 320, 1),  # mask
-            torch.rand(1, 320, 320, 2),  # initial prediction
-            torch.rand(1, 320, 320, 2),  # target
+            torch.rand(1, 32, 200, 200, 2),  # kspace
+            torch.rand(1, 32, 200, 200, 2),  # sesitivity maps
+            torch.rand(1, 1, 200, 200, 1),  # mask
+            torch.rand(1, 200, 200, 2),  # initial prediction
+            torch.rand(1, 200, 200, 2),  # target
         ]
 
     def forward(

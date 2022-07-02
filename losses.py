@@ -23,6 +23,9 @@ class DiceLoss(nn.Module):
         self.smooth_dr = float(smooth_dr)
         self.batch = batch
 
+    def weights(self, x):
+        return torch.reciprocal(x)
+
     def forward(self, input, target):
         if target.shape != input.shape:
             raise AssertionError(
@@ -59,7 +62,9 @@ class DiceLoss(nn.Module):
 
         denominator = ground_o + pred_o
 
-        dice = (2.0 * intersection + self.smooth_nr) / (denominator + self.smooth_dr)
+        dice = (2.0 * intersection * self.weights(ground_o) + self.smooth_nr) / (
+            denominator * self.weights(ground_o) + self.smooth_dr
+        )
         loss = 1.0 - dice
 
         return loss.mean(1), dice.mean(1)
@@ -134,8 +139,8 @@ def hausdorf_distance(preds, target, include_background=True):
     binairy_target = binerize_segmentation(target)
     pred_class = binairy_preds.sum((0, 2, 3))[1:].bool()
     target_class = binairy_target.sum((0, 2, 3))[1:].bool()
-    if pred_class.float().sum() < 2 or target_class.float().sum() < 2:
-        return torch.tensor([nan], device=preds.device)
+    # if pred_class.float().sum() < 2 or target_class.float().sum() < 2:
+    #     return torch.tensor([nan], device=preds.device)
     if pred_class.float().sum() == 2 and target_class.float().sum() == 2:
         binairy_preds = binairy_preds[:, :3, ...]
         binairy_target = binairy_target[:, :3, ...]
@@ -151,8 +156,8 @@ def average_surface_distance(preds, target, include_background=True):
     binairy_preds = binerize_segmentation(torch.softmax(preds, dim=1))
     binairy_target = binerize_segmentation(target)
     class_size = binairy_target.sum((0, 2, 3))[1:].bool()
-    if class_size.float().sum() < 2:
-        return torch.tensor([nan], device=preds.device)
+    # if class_size.float().sum() < 2:
+    #     return torch.tensor([nan], device=preds.device)
     if class_size.float().sum() == 2:
         binairy_preds = binairy_preds[:, :3, ...]
         binairy_target = binairy_target[:, :3, ...]
@@ -167,3 +172,4 @@ def binerize_segmentation(tensor):
     for i in range(tensor.shape[1]):
         binairy_tensor[:, i, ...] = tensor_label == i
     return binairy_tensor.byte()
+

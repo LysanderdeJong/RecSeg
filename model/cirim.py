@@ -250,11 +250,11 @@ class CIRIMModule(pl.LightningModule):
             output_type=self.hparams.output_type,
         )
         self.example_input_array = [
-            torch.rand(1, 32, 320, 320, 2),  # kspace
-            torch.rand(1, 32, 320, 320, 2),  # sesitivity maps
-            torch.rand(1, 1, 320, 320, 1),  # mask
-            torch.rand(1, 320, 320, 2),  # initial prediction
-            torch.rand(1, 320, 320, 2),  # target
+            torch.rand(1, 32, 200, 200, 2),  # kspace
+            torch.rand(1, 32, 200, 200, 2),  # sesitivity maps
+            torch.rand(1, 1, 200, 200, 1),  # mask
+            torch.rand(1, 200, 200, 2),  # initial prediction
+            torch.rand(1, 200, 200, 2),  # target
         ]
 
     def forward(
@@ -345,9 +345,7 @@ class CIRIMModule(pl.LightningModule):
         max_value = batch[7][-1][0]
         loss_dict, output = self.step(batch, batch_idx)
         if isinstance(output, list):
-            output = [
-                (i * max_value).unsqueeze(0).detach().cpu() for j in output for i in j
-            ]
+            output = [i.unsqueeze(0).detach().cpu() for j in output for i in j]
         return loss_dict, (fname, slice_num, output)
 
     def fold(self, tensor):

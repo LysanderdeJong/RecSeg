@@ -25,20 +25,20 @@ class LogSegmentationMasksSKMTEA(pl.Callback):
         self.num_examples = num_examples
         self.class_labels = {
             7: {
-                0: "Background",
-                1: "Patellar Cartilage",
-                2: "Femoral Cartilage",
-                3: "Tibial Cartilage - Medial",
-                4: "Tibial Cartilage - Lateral",
-                5: "Meniscus - Medial",
-                6: "Meniscus - Lateral",
+                0: "background",
+                1: "patellar cartilage",
+                2: "femoral cartilage",
+                3: "tibial cartilage - medial",
+                4: "tibial cartilage - lateral",
+                5: "meniscus - medial",
+                6: "meniscus - lateral",
             },
             5: {
-                0: "Background",
-                1: "Patellar Cartilage",
-                2: "Femoral Cartilage",
-                3: "Tibial Cartilage",
-                4: "Meniscus",
+                0: "background",
+                1: "patellar cartilage",
+                2: "femoral cartilage",
+                3: "tibial cartilage",
+                4: "meniscus",
             },
         }
 
@@ -115,9 +115,9 @@ class LogSegmentationMasksDWI(pl.Callback):
         super().__init__()
         self.num_examples = num_examples
         self.class_labels = {
-            2: {0: "Background", 1: "Infarct Lesion"},
+            2: {0: "background", 1: "Infarct Lesion"},
             5: {
-                0: "Background",
+                0: "background",
                 1: "Infarct Lesion",
                 2: "Infarct Lesion",
                 3: "Infarct Lesion",
@@ -196,8 +196,8 @@ class LogSegmentationMasksTECFIDERA(pl.Callback):
         super().__init__()
         self.num_examples = num_examples
         self.class_labels = {
-            4: {0: "Background", 1: "Graymatter", 2: "Whitematter", 3: "Lesion"},
-            2: {0: "Background", 1: "Lesion"},
+            4: {0: "background", 1: "Graymatter", 2: "Whitematter", 3: "Lesion"},
+            2: {0: "background", 1: "Lesion"},
         }
 
         self.inputs = []
@@ -381,8 +381,8 @@ class LogSegmentationMasksRECSEGTECFIDERA(pl.Callback):
         super().__init__()
         self.num_examples = num_examples
         self.class_labels = {
-            4: {0: "Background", 1: "Graymatter", 2: "Whitematter", 3: "Lesion"},
-            2: {0: "Background", 1: "Lesion"},
+            4: {0: "background", 1: "Graymatter", 2: "Whitematter", 3: "Lesion"},
+            2: {0: "background", 1: "Lesion"},
         }
 
         self.inputs = []
@@ -762,10 +762,10 @@ class InferenceTimeCallback(pl.Callback):
             torch.cuda.Event(enable_timing=True),
             torch.cuda.Event(enable_timing=True),
         )
-        repetitions = 200
+        repetitions = 300
         timings = torch.zeros(repetitions)
 
-        for _ in range(25):
+        for _ in range(30):
             _ = pl_module(*dummy_input)
 
         for rep in range(repetitions):

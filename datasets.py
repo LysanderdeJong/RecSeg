@@ -28,7 +28,7 @@ class skmtea(Dataset):
         segmentation_path="segmentation_masks/raw-data-track/",
         seq_len=1,
         compact_masks=False,
-        use_cache=True,
+        use_cache=False,
     ):
         self.split = split
         self.data_root = data_root
@@ -72,6 +72,8 @@ class skmtea(Dataset):
                 self.mri_slices += [(mri_path, i) for i in range(mri_num_slices)]
                 self.mask_slices += [(mask_path, i) for i in range(mask_num_slices)]
 
+                mri.close()
+
             assert len(self.mri_slices) == len(self.mask_slices)
 
             dataset_cache.append(self.mri_slices)
@@ -104,7 +106,7 @@ class skmtea(Dataset):
         mri_image = rearrange(mri_image, "x y z () i -> z i x y")
         seg_mask = rearrange(seg_mask, "h w c s -> c s h w")
 
-        return mri_image, seg_mask
+        return (fmri.split("/")[-1], mri_slice), mri_image, seg_mask
 
     def convert_mask(self, mask, n_classes=7, compact=False):
         x, y, z = mask.shape
@@ -213,6 +215,7 @@ class brain_dwi(Dataset):
         seg_mask = torch.from_numpy(self.convert_mask(mask, compact=True))
 
         mri_image = rearrange(mri_image, "x y z -> z () x y")
+        seg_mask = torch.rot90(seg_mask, k=2, dims=(0, 1))
         seg_mask = rearrange(seg_mask, "h w c s -> c s h w")
 
         if self.input_transform:
@@ -221,7 +224,7 @@ class brain_dwi(Dataset):
         if self.target_transform:
             seg_mask = self.target_transform(seg_mask)
 
-        return mri_image, seg_mask
+        return (fmri.split("/")[-1], mri_slice), mri_image, seg_mask
 
     def convert_mask(self, mask, n_classes=6, compact=False):
         x, y, z = mask.shape
@@ -300,7 +303,7 @@ class TecFidera(Dataset):
                 mask_num_slices = mask_shape - self.seq_len + 1
 
                 self.mri_slices += [(mri_path, i) for i in range(mri_num_slices)]
-                self.mask_slices += [(mri_path, i) for i in range(mask_num_slices)]
+                self.mask_slices += [(seg_path, i) for i in range(mask_num_slices)]
 
             assert len(self.mri_slices) == len(self.mask_slices)
 
@@ -345,6 +348,8 @@ class TecFidera(Dataset):
         mri_image = to_tensor(mri)
         seg_mask = torch.from_numpy(self.convert_mask(mask, compact=self.compact_masks))
 
+        if len(mri_image.shape) == 4:
+            mri_image = mri_image.unsqueeze(1)
         mri_image = rearrange(mri_image, "z () x y c -> z c x y")
         seg_mask = rearrange(seg_mask, "c h w s -> c s h w")
 
@@ -562,11 +567,19 @@ class MRISliceDataset(FastMRISliceDataset):
             kspace = hf["kspace"][dataslice : dataslice + self.seq_len].astype(
                 np.complex64
             )
+            if len(kspace.shape) > 4:
+                kspace = kspace[:, :, :, 0, :]
+                kspace = rearrange(kspace, "x y z c -> x c y z")
 
             if "sensitivity_map" in hf:
                 sensitivity_map = hf["sensitivity_map"][
                     dataslice : dataslice + self.seq_len
                 ].astype(np.complex64)
+            elif "maps" in hf:
+                sensitivity_map = hf["maps"][
+                    dataslice : dataslice + self.seq_len
+                ].astype(np.complex64)
+                sensitivity_map = rearrange(sensitivity_map, "x y z c () -> x c y z")
             elif self.sense_root is not None and self.sense_root != "None":
                 with h5py.File(
                     Path(self.sense_root)
@@ -606,12 +619,16 @@ class MRISliceDataset(FastMRISliceDataset):
 
             if "reconstruction_sense" in hf:
                 self.recons_key = "reconstruction_sense"
+            elif "target" in hf:
+                self.recons_key = "target"
 
             target = (
                 hf[self.recons_key][dataslice : dataslice + self.seq_len]
                 if self.recons_key in hf
                 else None
             )
+            if target is not None and len(target.shape) > 4:
+                target = np.squeeze(target[:, :, :, 0, :])
 
             if self.segmentation:
                 if "lesion_segmentation" in hf:

@@ -14,7 +14,7 @@ class SKMDataModule(pl.LightningDataModule):
         segmentation_path,
         annotation_path=None,
         seq_len=1,
-        use_cache=True,
+        use_cache=False,
         **kwargs,
     ):
         super().__init__()
@@ -298,10 +298,20 @@ class TecFideraDataModule(pl.LightningDataModule):
     ):
         super().__init__()
         self.save_hyperparameters()
-        self.file_split = {}
 
         file_names = os.listdir(os.path.join(data_root))
-        self.file_split["all"] = file_names
+        test_set = [
+            "DMF008_T2_AXFLAIR_transverse.h5",
+            "DMF047_T0_AXFLAIR_transverse.h5",
+            "DMF063_T0_AXFLAIR_coronal.h5",
+            "DMF043_T0_AXFLAIR_coronal.h5",
+            "DMF028_T0_AXFLAIR_sagittal.h5",
+            "DMF037_T0_AXFLAIR_sagittal.h5",
+        ]
+        self.file_split = {
+            "all": file_names,
+            "test": test_set,
+        }
 
     def _make_dataset(self, split, data_files):
         return TecFidera(
@@ -327,6 +337,8 @@ class TecFideraDataModule(pl.LightningDataModule):
             self.val, self.test = random_split(
                 self.val, [len(self.val) // 2, len(self.val) - len(self.val) // 2]
             )
+        if stage == "test":
+            self.test = self._make_dataset("test", self.file_split)
 
     def train_dataloader(self):
         return DataLoader(
@@ -487,6 +499,231 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
         parser.add_argument(
             "--data_root",
             default="/data/projects/tecfidera/data/h5_recon_dataset_new/",
+            type=str,
+            help="Path to the data root.",
+        )
+        parser.add_argument(
+            "--challenge",
+            default="multicoil",
+            type=str,
+            help="Challange category taken from FastMRI",
+        )
+        parser.add_argument(
+            "--sample_rate",
+            default=1.0,
+            type=float,
+            help="Fraction of the data to use.",
+        )
+        parser.add_argument(
+            "--mask_type",
+            default="gaussian2d",
+            type=str,
+            help="The string representation of the mask type.",
+        )
+        parser.add_argument(
+            "--shift_mask",
+            action="store_true",
+            default=False,
+            help="The string representation of the mask type.",
+        )
+        parser.add_argument(
+            "--accelerations",
+            nargs="+",
+            type=int,
+            default=[4, 6, 8, 10],
+            help="Mask acceleration factors",
+        )
+        parser.add_argument(
+            "--center_fractions",
+            nargs="+",
+            type=float,
+            default=[0.7, 0.7, 0.7, 0.7],
+            help="Center fraction of the mask",
+        )
+        parser.add_argument(
+            "--mask_center_scale", type=float, default=0.02, help="Mask center scale",
+        )
+        parser.add_argument(
+            "--normalize_inputs",
+            action="store_false",
+            default=True,
+            help="Whether or not to normaliz the input to the network",
+        )
+        parser.add_argument(
+            "--crop_size",
+            nargs="+",
+            type=int,
+            default=None,
+            help="Size to crop kspace to",
+        )
+        parser.add_argument(
+            "--crop_before_masking",
+            action="store_false",
+            default=True,
+            help="Whether or not the cropping happens before or after the masking",
+        )
+        parser.add_argument(
+            "--kspace_zero_filling_size",
+            nargs="+",
+            type=int,
+            default=None,
+            help="Size to kspace to be filled",
+        )
+        parser.add_argument(
+            "--fft_type_data",
+            default="normal",
+            type=str,
+            help="The type of fft normilization to use.",
+        )
+        parser.add_argument(
+            "--use_seed",
+            action="store_false",
+            default=True,
+            help="Whether to use the seed",
+        )
+
+        parser.add_argument(
+            "--segmentation",
+            action="store_true",
+            default=False,
+            help="Produce a segmentation target along side the rest.",
+        )
+
+        parser.add_argument(
+            "--seq_len", default=1, type=int, help="Number of slices to read at once.",
+        )
+
+        parser.add_argument(
+            "--compact_mask",
+            action="store_true",
+            default=False,
+            help="Only segment lesions.",
+        )
+
+        parser.add_argument(
+            "--train_fraction",
+            default=0.9,
+            type=float,
+            help="Fraction of the data used for training.",
+        )
+
+        # data loader arguments
+        parser.add_argument(
+            "--batch_size", default=1, type=int, help="Data loader batch size"
+        )
+        parser.add_argument(
+            "--num_workers",
+            default=4,
+            type=int,
+            help="Number of workers to use in data loader",
+        )
+
+        return parent_parser
+
+
+class SKMTEAMRIDataModule(pl.LightningDataModule):
+    def __init__(
+        self, data_root, annotation_path=None, **kwargs,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+
+        self.data_split = {}
+        if annotation_path is None:
+            file_names = os.listdir(os.path.join(data_root))
+            file_names = [i for i in file_names]
+            self.data_split["all"] = file_names
+        else:
+            data_configs = os.listdir(os.path.join(annotation_path))
+            data_configs = [i[:-5] for i in data_configs]
+            for split in data_configs:
+                with open(os.path.join(annotation_path, f"{split}.json")) as f:
+                    config = json.load(f)
+                    self.data_split[split] = [
+                        os.path.join(data_root, i["file_name"])
+                        for i in config["images"]
+                    ]
+
+    def _make_dataset(self, split="all", data_files=None):
+        return MRISliceDataset(
+            root=self.hparams.data_root if data_files is None else data_files,
+            challenge=self.hparams.challenge,
+            sample_rate=self.hparams.sample_rate,
+            mask_type=self.hparams.mask_type,
+            shift_mask=self.hparams.shift_mask,
+            accelerations=self.hparams.accelerations,
+            center_fractions=self.hparams.center_fractions,
+            scale=self.hparams.mask_center_scale,
+            normalize_inputs=self.hparams.normalize_inputs,
+            crop_size=self.hparams.crop_size,
+            crop_before_masking=self.hparams.crop_before_masking,
+            kspace_zero_filling_size=self.hparams.kspace_zero_filling_size,
+            fft_type=self.hparams.fft_type_data,
+            use_seed=self.hparams.use_seed,
+            segmentation=self.hparams.segmentation,
+            seq_len=self.hparams.seq_len,
+            compact_mask=self.hparams.compact_mask,
+        )
+
+    def setup(self, stage=None):
+        if stage == "fit" or stage is None:
+            if self.hparams.annotation_path:
+                self.train = self._make_dataset("train", self.data_split["train"])
+                self.val = self._make_dataset("val", self.data_split["val"])
+            else:
+                dataset = self._make_dataset(data_files=self.data_split["all"])
+                self.train, self.val = random_split(
+                    dataset,
+                    [
+                        int(self.hparams.train_fraction * len(dataset)),
+                        len(dataset)
+                        - (int(self.hparams.train_fraction * len(dataset))),
+                    ],
+                )
+                self.val, self.test = random_split(
+                    self.val, [len(self.val) // 2, len(self.val) - len(self.val) // 2]
+                )
+        if (stage == "test" or stage is None) and self.hparams.annotation_path:
+            self.test = self._make_dataset("test", self.data_split["test"])
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train,
+            batch_size=self.hparams.batch_size,
+            shuffle=True,
+            num_workers=self.hparams.num_workers,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            num_workers=self.hparams.num_workers,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            num_workers=self.hparams.num_workers,
+        )
+
+    @staticmethod
+    def add_data_specific_args(parent_parser):
+        parser = parent_parser.add_argument_group("Dataset")
+
+        # dataset arguments
+        parser.add_argument(
+            "--data_root",
+            default="/data/projects/recon/data/public/qdess/v1-release/h5/",
+            type=str,
+            help="Path to the data root.",
+        )
+        parser.add_argument(
+            "--annotation_path",
+            default="/data/projects/recon/data/public/qdess/v1-release/annotations/v1.0.0/",
             type=str,
             help="Path to the data root.",
         )

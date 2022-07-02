@@ -11,7 +11,7 @@ from tqdm import tqdm
 def recon(args):
     files = pathlib.Path(args.data).glob("*.h5")
     for file in tqdm(sorted(files)):
-        data = np.array(h5py.File(file)["reconstruction"])
+        data = np.array(h5py.File(file, "r")["reconstruction"])
         if data.ndim > 3:
             data = data.squeeze()
 
@@ -41,10 +41,29 @@ def recon(args):
 
 def seg(args):
     files = pathlib.Path(args.data).glob("*.h5")
-    class_labels = {0: "background", 1: "graymatter", 2: "whitematter", 3: "lesion"}
+    class_labels = {
+        2: {0: "background", 1: "lesion"},
+        4: {0: "background", 1: "graymatter", 2: "whitematter", 3: "lesion"},
+        5: {
+            0: "background",
+            1: "Patellar_Cartilage",
+            2: "Femoral_Cartilage",
+            3: "Tibial_Cartilage",
+            4: "meniscus",
+        },
+        7: {
+            0: "background",
+            1: "Patellar_Cartilage",
+            2: "Femoral_Cartilage",
+            3: "Tibial_Cartilage_medial",
+            4: "Tibial_Cartilage_lateral",
+            5: "meniscus_medial",
+            6: "meniscus_lateral",
+        },
+    }
     for file in tqdm(sorted(files)):
-        data = np.squeeze(np.array(h5py.File(file)["segmentation"]))
-        if data.ndim != 4 or data.shape[1] != 4:
+        data = np.squeeze(np.array(h5py.File(file, "r")["segmentation"]))
+        if data.ndim != 4 or data.shape[1] not in class_labels.keys():
             raise ValueError(f"{str(file).split('/')[-1]}: {data.shape}")
         if np.max(data) > 1.0:
             data = torch.softmax(torch.from_numpy(data), dim=1).numpy()
@@ -61,10 +80,12 @@ def seg(args):
                 seg = np.transpose(seg, axes=(0, 2, 1))
                 seg = np.flip(seg, axis=(0, 1, 2))
 
+            # print(seg.shape, seg.dtype)
+
             # Hardcoded the pixel size, as either 1.12 mm or 1 mm
             img = nib.Nifti1Image(seg, np.eye(4) * 1.12)
 
-            filename = f"FLAIR_{class_labels[class_num]}"
+            filename = f"FLAIR_{class_labels[data.shape[1]][class_num].lower()}"
 
             folder = pathlib.Path(
                 f"{str(args.output)}/" + str(file).split("/")[-1].split(".")[0]

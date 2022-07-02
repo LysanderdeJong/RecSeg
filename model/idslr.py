@@ -29,7 +29,7 @@ class DC(nn.Module):
         if self.soft_dc:
             self.dc_weight = nn.Parameter(torch.ones(1))
 
-    def forward(self, kspace, og_kspace, mask):
+    def forward(self, kspace, og_kspace, mask=None):
         if mask is not None:
             zero = torch.zeros_like(kspace, device=kspace.device)
             dc = torch.where(mask.bool(), kspace - og_kspace, zero)
@@ -357,8 +357,8 @@ class IDSLRModule(pl.LightningModule):
             fft_type=self.hparams.fft_type,
         )
         self.example_input_array = [
-            torch.rand(1, self.hparams.in_chans // 2, 256, 256, 2, device=self.device),
-            torch.rand(1, 1, 256, 256, 1, device=self.device),
+            torch.rand(1, self.hparams.in_chans // 2, 200, 200, 2, device=self.device),
+            torch.rand(1, 1, 200, 200, 1, device=self.device),
         ]
 
         self.dice_loss = DiceLoss(include_background=False)
@@ -404,13 +404,15 @@ class IDSLRModule(pl.LightningModule):
         target = torch.abs(target) / torch.abs(target).amax((-1, -2), True)
 
         # print(fname, pred_seg.shape, segmentation.shape)
-        loss_dict = self.calculate_metrics(pred_seg, segmentation, important_only=False)
+        loss_dict = self.calculate_metrics(
+            pred_seg, segmentation, important_only=self.hparams.train_metric_only
+        )
         loss_dict["l2"] = self.calculate_loss(pred_image, target)
         loss_dict["psnr"] = FM.psnr(image.unsqueeze(-3), target.unsqueeze(-3))
         loss_dict["ssim"] = FM.ssim(image.unsqueeze(-3), target.unsqueeze(-3))
-        loss_dict["loss"] = (1 - 1e-5) * loss_dict["l2"] + 1e-5 * loss_dict[
-            "cross_entropy"
-        ]
+        loss_dict["loss"] = (1 - 1e-5) * loss_dict["l2"] + 1e-5 * (
+            loss_dict["cross_entropy"]
+        )
         return loss_dict, pred_image, pred_seg
 
     def calculate_metrics(self, preds, target, important_only=True):
@@ -676,6 +678,13 @@ class IDSLRModule(pl.LightningModule):
 
         parser.add_argument(
             "--fft_type", type=str, default="normal", help="Type of FFT to use"
+        )
+
+        parser.add_argument(
+            "--train_metric_only",
+            default=True,
+            type=bool,
+            help="Turn on the calculation of evaluation metrics.",
         )
 
         # training params (opt)

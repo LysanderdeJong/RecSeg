@@ -2,11 +2,17 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
+from torchmetrics import functional as FM
 from einops import rearrange
 
 from model.unet import ConvBlock, TransposeConvBlock
 
-from losses import DiceLoss, MC_CrossEntropy
+from losses import (
+    DiceLoss,
+    MC_CrossEntropy,
+    average_surface_distance,
+    hausdorf_distance,
+)
 
 
 class AttentionGate(nn.Module):
@@ -50,18 +56,14 @@ class AttentionGate(nn.Module):
         Returns:
             Output tensor of shape `(N, out_chans, H, W)`.
         """
-        # print(x.shape, g.shape)
-        print(x.shape, g.shape)
         W_x = self.W_x(x)
         w_g = self.W_g(g)
-        print(x.shape, g.shape)
         W_g = F.interpolate(
             w_g,
             size=(W_x.shape[-2], W_x.shape[-1]),
             mode="bilinear",
             align_corners=False,
         )
-        print(x.shape, g.shape)
         f = F.relu(W_x + W_g, inplace=True)
         a = torch.sigmoid(self.psi(f))
         a = F.interpolate(
@@ -201,7 +203,7 @@ class AttUnetModule(pl.LightningModule):
             drop_prob=self.hparams.drop_prob,
         )
         self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 256, 256, device=self.device
+            1, self.hparams.in_chans, 200, 200, device=self.device
         )
 
         self.dice_loss = DiceLoss(include_background=False)
@@ -231,23 +233,249 @@ class AttUnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = {
-            "cross_entropy": self.cross_entropy(
-                output, torch.argmax(target, dim=1).long()
-            )
-        }
-
-        dice_loss, dice_score = self.dice_loss(output, target)
-        loss_dict["dice_loss"] = dice_loss.mean()
-        loss_dict["dice_score"] = dice_score.detach()
-        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
+        loss_dict = self.calculate_metrics(
+            output, target, important_only=self.hparams.train_metric_only
+        )
         return loss_dict, fname, output
 
     def training_step(self, batch, batch_idx):
-        loss_dict, output = self.step(batch, batch_idx)
+        loss_dict, fname, output = self.step(batch, batch_idx)
         for metric, value in loss_dict.items():
             self.log(f"train_{metric}", value.mean().detach())
         return loss_dict["loss"]
+
+    def calculate_metrics(self, preds, target, important_only=True):
+        pred_label = torch.softmax(preds, dim=1).argmax(1)
+        target_label = target.argmax(1)
+
+        loss_dict = {"cross_entropy": self.cross_entropy(preds, target_label)}
+        dice_loss, dice_score = self.dice_loss(preds, target)
+        loss_dict["dice_loss"] = dice_loss.mean()
+        loss_dict["dice_score"] = dice_score.detach()
+
+        if not important_only:
+            dice_per_class = FM.dice_score(
+                torch.softmax(preds, dim=1), target_label, bg=True, reduction="none"
+            )
+            if dice_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+
+            loss_dict["f1_micro"] = FM.fbeta(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["f1_macro"] = FM.fbeta(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["f1_weighted"] = FM.fbeta(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            f1_per_class = FM.fbeta(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            if f1_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+
+            loss_dict["precision_micro"] = FM.precision(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["precision_macro"] = FM.precision(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["precision_weighted"] = FM.precision(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            precision_per_class = FM.precision(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            if precision_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+
+            loss_dict["recall_micro"] = FM.recall(
+                pred_label, target_label, mdmc_average="samplewise", ignore_index=0
+            )
+            loss_dict["recall_macro"] = FM.recall(
+                pred_label,
+                target_label,
+                average="macro",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            loss_dict["recall_weighted"] = FM.recall(
+                pred_label,
+                target_label,
+                average="weighted",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+                ignore_index=0,
+            )
+            recall_per_class = FM.recall(
+                pred_label,
+                target_label,
+                average="none",
+                mdmc_average="samplewise",
+                num_classes=preds.shape[1],
+            )
+            if recall_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+
+            loss_dict["hausdorff_distance"] = hausdorf_distance(
+                preds, target, include_background=False
+            )
+            loss_dict["average_surface_distance"] = average_surface_distance(
+                preds, target, include_background=False
+            )
+
+        loss_dict["loss"] = loss_dict["cross_entropy"] + loss_dict["dice_loss"]
+        return loss_dict
 
     def validation_step(self, batch, batch_idx):
         loss_dict, fname, output = self.step(batch, batch_idx)
@@ -261,9 +489,9 @@ class AttUnetModule(pl.LightningModule):
             self.log(f"test_{metric}", value.mean().detach(), sync_dist=True)
         return loss_dict
 
-    def predict_step(self, batch, batch_idx, dataloader_idx):
-        fname, input, _ = batch
-        return self(input)
+    def predict_step(self, batch, batch_idx):
+        loss_dict, fname, segmentation = self.step(batch, batch_idx)
+        return loss_dict, fname, segmentation.detach().cpu()
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -302,6 +530,13 @@ class AttUnetModule(pl.LightningModule):
         )
         parser.add_argument(
             "--drop_prob", default=0.1, type=float, help="U-Net dropout probability"
+        )
+
+        parser.add_argument(
+            "--train_metric_only",
+            default=True,
+            type=bool,
+            help="Turn on the calculation of evaluation metrics.",
         )
 
         # training params (opt)

@@ -49,7 +49,7 @@ def train(args):
     )
     callbacks.append(modelcheckpoint)
     # callbacks.append(StochasticWeightAveraging(swa_epoch_start=20, annealing_epochs=10))
-    callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=8))
+    callbacks.append(EarlyStopping(monitor="val_loss", mode="min", patience=10))
     callbacks.append(ModelSummary(max_depth=2))
     callbacks.append(TQDMProgressBar(refresh_rate=1 if args.progress_bar else 0))
     callbacks.append(LearningRateMonitor(logging_interval="step"))
@@ -58,7 +58,7 @@ def train(args):
     if args.wandb:
         os.environ["WANDB_CACHE_DIR"] = "/scratch/lgdejong/.cache/wandb/"
         wandb_logger = WandbLogger(
-            project="techfidera-recseg", log_model="all", entity="lysander",
+            project=args.project, log_model="all", entity="lysander",
         )
 
         if args.dataset == "skmtea":
@@ -84,7 +84,7 @@ def train(args):
         default_root_dir=args.log_dir,
         auto_select_gpus=True,
         gpus=None if args.gpus == "None" else args.gpus,
-        strategy=DDPStrategy(find_unused_parameters=False),
+        # strategy=DDPStrategy(find_unused_parameters=False),
         max_epochs=args.epochs,
         callbacks=callbacks,
         auto_scale_batch_size="binsearch" if args.auto_batch else None,
@@ -228,6 +228,13 @@ if __name__ == "__main__":
         "--wandb",
         action="store_true",
         help="Enables logging to wandb, otherwise uses tensorbaord.",
+    )
+    parser.add_argument(
+        "--project",
+        default="techfidera-recseg",
+        type=str,
+        choices=["techfidera-recseg", "dwi-segmentation", "mri-segmentation"],
+        help="Wandb project",
     )
 
     parser.add_argument(

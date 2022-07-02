@@ -1,3 +1,4 @@
+from email.policy import default
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -218,7 +219,7 @@ class UnetModule(pl.LightningModule):
             drop_prob=self.hparams.drop_prob,
         )
         self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 256, 256, device=self.device
+            1, self.hparams.in_chans, 200, 200, device=self.device
         )
 
         self.dice_loss = DiceLoss(include_background=False)
@@ -248,7 +249,9 @@ class UnetModule(pl.LightningModule):
             print(output)
             raise ValueError
 
-        loss_dict = self.calculate_metrics(output, target, important_only=False)
+        loss_dict = self.calculate_metrics(
+            output, target, important_only=self.hparams.train_metric_only
+        )
         return loss_dict, fname, output
 
     def calculate_metrics(self, preds, target, important_only=True):
@@ -264,10 +267,38 @@ class UnetModule(pl.LightningModule):
             dice_per_class = FM.dice_score(
                 torch.softmax(preds, dim=1), target_label, bg=True, reduction="none"
             )
-            for i, label in enumerate(
-                ["background", "graymatter", "whitematter", "lesion"]
-            ):
-                loss_dict[f"dice_{label}"] = dice_per_class[i]
+            if dice_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
 
             loss_dict["f1_micro"] = FM.fbeta(
                 pred_label, target_label, mdmc_average="samplewise", ignore_index=0
@@ -295,10 +326,38 @@ class UnetModule(pl.LightningModule):
                 mdmc_average="samplewise",
                 num_classes=preds.shape[1],
             )
-            for i, label in enumerate(
-                ["background", "graymatter", "whitematter", "lesion"]
-            ):
-                loss_dict[f"f1_{label}"] = f1_per_class[i]
+            if f1_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
 
             loss_dict["precision_micro"] = FM.precision(
                 pred_label, target_label, mdmc_average="samplewise", ignore_index=0
@@ -326,10 +385,38 @@ class UnetModule(pl.LightningModule):
                 mdmc_average="samplewise",
                 num_classes=preds.shape[1],
             )
-            for i, label in enumerate(
-                ["background", "graymatter", "whitematter", "lesion"]
-            ):
-                loss_dict[f"precision_{label}"] = precision_per_class[i]
+            if precision_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
 
             loss_dict["recall_micro"] = FM.recall(
                 pred_label, target_label, mdmc_average="samplewise", ignore_index=0
@@ -357,10 +444,38 @@ class UnetModule(pl.LightningModule):
                 mdmc_average="samplewise",
                 num_classes=preds.shape[1],
             )
-            for i, label in enumerate(
-                ["background", "graymatter", "whitematter", "lesion"]
-            ):
-                loss_dict[f"recall_{label}"] = recall_per_class[i]
+            if recall_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
 
             loss_dict["hausdorff_distance"] = hausdorf_distance(
                 preds, target, include_background=False
@@ -433,6 +548,13 @@ class UnetModule(pl.LightningModule):
             "--drop_prob", default=0.1, type=float, help="U-Net dropout probability"
         )
 
+        parser.add_argument(
+            "--train_metric_only",
+            default=True,
+            type=bool,
+            help="Turn on the calculation of evaluation metrics.",
+        )
+
         # training params (opt)
         parser.add_argument(
             "--lr", default=1e-3, type=float, help="Optimizer learning rate"
@@ -463,7 +585,7 @@ class LamdaUnetModule(pl.LightningModule):
             num_slices=self.hparams.num_slices,
         )
         self.example_input_array = torch.rand(
-            3, self.hparams.in_chans, 256, 256, device=self.device
+            3, self.hparams.in_chans, 200, 200, device=self.device
         )
 
         self.dice_loss = DiceLoss(include_background=False)
@@ -505,7 +627,9 @@ class LamdaUnetModule(pl.LightningModule):
             )
             loss_dict["loss"] = loss_dict["mc_cross_entropy"] + loss_dict["dice_loss"]
         else:
-            loss_dict = self.calculate_metrics(output, target, important_only=False)
+            loss_dict = self.calculate_metrics(
+                output, target, important_only=self.hparams.train_metric_only
+            )
         return loss_dict, fname, output
 
     def calculate_metrics(self, preds, target, important_only=True):
@@ -521,10 +645,38 @@ class LamdaUnetModule(pl.LightningModule):
             dice_per_class = FM.dice_score(
                 torch.softmax(preds, dim=1), target_label, bg=True, reduction="none"
             )
-            for i, label in enumerate(
-                ["background", "graymatter", "whitematter", "lesion"]
-            ):
-                loss_dict[f"dice_{label}"] = dice_per_class[i]
+            if dice_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
+            elif dice_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"dice_{label}"] = dice_per_class[i]
 
             loss_dict["f1_micro"] = FM.fbeta(
                 pred_label, target_label, mdmc_average="samplewise", ignore_index=0
@@ -552,10 +704,38 @@ class LamdaUnetModule(pl.LightningModule):
                 mdmc_average="samplewise",
                 num_classes=preds.shape[1],
             )
-            for i, label in enumerate(
-                ["background", "graymatter", "whitematter", "lesion"]
-            ):
-                loss_dict[f"f1_{label}"] = f1_per_class[i]
+            if f1_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
+            elif f1_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"f1_{label}"] = f1_per_class[i]
 
             loss_dict["precision_micro"] = FM.precision(
                 pred_label, target_label, mdmc_average="samplewise", ignore_index=0
@@ -583,10 +763,38 @@ class LamdaUnetModule(pl.LightningModule):
                 mdmc_average="samplewise",
                 num_classes=preds.shape[1],
             )
-            for i, label in enumerate(
-                ["background", "graymatter", "whitematter", "lesion"]
-            ):
-                loss_dict[f"precision_{label}"] = precision_per_class[i]
+            if precision_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
+            elif precision_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"precision_{label}"] = precision_per_class[i]
 
             loss_dict["recall_micro"] = FM.recall(
                 pred_label, target_label, mdmc_average="samplewise", ignore_index=0
@@ -614,10 +822,38 @@ class LamdaUnetModule(pl.LightningModule):
                 mdmc_average="samplewise",
                 num_classes=preds.shape[1],
             )
-            for i, label in enumerate(
-                ["background", "graymatter", "whitematter", "lesion"]
-            ):
-                loss_dict[f"recall_{label}"] = recall_per_class[i]
+            if recall_per_class.shape[0] == 2:
+                for i, label in enumerate(["background", "lesion"]):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 4:
+                for i, label in enumerate(
+                    ["background", "graymatter", "whitematter", "lesion"]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 5:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage",
+                        "meniscus",
+                    ]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
+            elif recall_per_class.shape[0] == 7:
+                for i, label in enumerate(
+                    [
+                        "background",
+                        "patellar cartilage",
+                        "femoral cartilage",
+                        "tibial cartilage - medial",
+                        "tibial cartilage - lateral",
+                        "meniscus - medial",
+                        "meniscus - lateral",
+                    ]
+                ):
+                    loss_dict[f"recall_{label}"] = recall_per_class[i]
 
             loss_dict["hausdorff_distance"] = hausdorf_distance(
                 preds, target, include_background=False
@@ -703,6 +939,13 @@ class LamdaUnetModule(pl.LightningModule):
             default=1,
             type=int,
             help="Number MC samples to take.",
+        )
+
+        parser.add_argument(
+            "--train_metric_only",
+            default=True,
+            type=bool,
+            help="Turn on the calculation of evaluation metrics.",
         )
 
         # training params (opt)

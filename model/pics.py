@@ -116,10 +116,10 @@ class PICSModule(pl.LightningModule):
             output_type="SENSE",
         )
         self.example_input_array = [
-            torch.rand(1, 32, 320, 320, 2),  # kspace
-            torch.rand(1, 32, 320, 320, 2),  # sesitivity maps
-            torch.rand(1, 1, 320, 320, 1),  # mask
-            torch.rand(1, 320, 320, 2),  # target
+            torch.rand(1, 32, 200, 200, 2),  # kspace
+            torch.rand(1, 32, 200, 200, 2),  # sesitivity maps
+            torch.rand(1, 1, 200, 200, 1),  # mask
+            torch.rand(1, 200, 200, 2),  # target
         ]
 
     def forward(
@@ -148,6 +148,7 @@ class PICSModule(pl.LightningModule):
         target = self.fold(target)
 
         y = torch.view_as_complex(y)
+        # y = torch.fft.fftshift(y, dim=[-2, -1])
         # if self.hparams.fft_type != "orthogonal":
         #     y = torch.fft.fftshift(y, dim=(-2, -1))
         y = y.permute(0, 2, 3, 1).detach().cpu().numpy()
@@ -159,6 +160,12 @@ class PICSModule(pl.LightningModule):
             )
 
         sensitivity_maps = torch.view_as_complex(sensitivity_maps)
+        sensitivity_maps = sensitivity_maps / torch.amax(
+            torch.abs(sensitivity_maps), keepdim=True
+        )
+        # sensitivity_maps = torch.fft.fft2(sensitivity_maps, dim=[-2, -1])
+        # sensitivity_maps = torch.fft.fftshift(sensitivity_maps, dim=[-2, -1])
+        # sensitivity_maps = torch.fft.ifft2(sensitivity_maps, dim=[-2, -1])
         if self.hparams.fft_type != "orthogonal":
             sensitivity_maps = torch.fft.fftshift(sensitivity_maps, dim=(-2, -1))
         sensitivity_maps = sensitivity_maps.permute(0, 2, 3, 1).detach().cpu().numpy()  # type: ignore

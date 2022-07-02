@@ -214,7 +214,7 @@ class Unet3dModule(pl.LightningModule):
             drop_prob=self.hparams.drop_prob,
         )
         self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 3, 256, 256, device=self.device
+            1, self.hparams.in_chans, 3, 200, 200, device=self.device
         )
 
         self.dice_loss = DiceLoss(include_background=False)

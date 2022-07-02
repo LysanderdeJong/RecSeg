@@ -9,6 +9,7 @@ from dataloader import (
     BrainDWIDataModule,
     TecFideraDataModule,
     TecFideraMRIDataModule,
+    SKMTEAMRIDataModule,
 )
 
 from model.unet import UnetModule, LamdaUnetModule
@@ -110,6 +111,8 @@ def get_dataset(parser=None, args=None, dataset=None, **kwargs):
             parser = TecFideraDataModule.add_data_specific_args(parser)
         elif args.dataset == "tecfideramri":
             parser = TecFideraMRIDataModule.add_data_specific_args(parser)
+        elif args.dataset == "skmteamri":
+            parser = SKMTEAMRIDataModule.add_data_specific_args(parser)
         else:
             raise NotImplementedError
         return parser
@@ -122,6 +125,8 @@ def get_dataset(parser=None, args=None, dataset=None, **kwargs):
             return TecFideraDataModule(**kwargs)
         elif dataset == "tecfideramri":
             return TecFideraMRIDataModule(**kwargs)
+        elif dataset == "skmteamri":
+            return SKMTEAMRIDataModule(**kwargs)
         else:
             raise NotImplementedError
     else:

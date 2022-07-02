@@ -45,18 +45,18 @@ class RecSegModule(pl.LightningModule):
         # )
 
         self.example_input_array = [
-            torch.rand(3, 32, 320, 320, 2),  # kspace
-            torch.rand(3, 32, 320, 320, 2),  # sesitivity maps
-            torch.rand(3, 1, 320, 320, 1),  # mask
-            torch.rand(3, 320, 320, 2),  # initial prediction
-            torch.rand(3, 320, 320),  # target
+            torch.rand(3, 32, 200, 200, 2),  # kspace
+            torch.rand(3, 32, 200, 200, 2),  # sesitivity maps
+            torch.rand(3, 1, 200, 200, 1),  # mask
+            torch.rand(3, 200, 200, 2),  # initial prediction
+            torch.rand(3, 200, 200),  # target
         ]
 
     def forward(self, y, sensitivity_maps, mask, init_pred, target):
-        recons = self.cirim.forward(y, sensitivity_maps, mask, init_pred, target)
+        recons = self.cirim(y, sensitivity_maps, mask, init_pred, target)
         x = rearrange(torch.view_as_real(recons[-1][-1]), "b h w c -> b c h w")
         x = F.group_norm(x, num_groups=1)
-        seg = self.lambdaunet.forward(x)
+        seg = self.lambdaunet(x)
         return recons, seg
 
     def step(self, batch, batch_indx=None):
@@ -99,8 +99,8 @@ class RecSegModule(pl.LightningModule):
         loss_dict["psnr"] = FM.psnr(output.unsqueeze(-3), target.unsqueeze(-3))
         loss_dict["ssim"] = FM.ssim(output.unsqueeze(-3), target.unsqueeze(-3))
         loss_dict["loss"] = (
-            1e-3 * (loss_dict["cross_entropy"] + loss_dict["dice_loss"])
-            + (1 - 1e-3) * loss_dict["l1"]
+            1e-4 * (loss_dict["cross_entropy"] + loss_dict["dice_loss"])
+            + (1 - 1e-4) * loss_dict["l1"]
         )
         return loss_dict, preds_recon, pred_seg
 

@@ -204,7 +204,7 @@ class VnetModule(pl.LightningModule):
             dropout_prob=self.hparams.drop_prob,
         )
         self.example_input_array = torch.rand(
-            1, self.hparams.in_chans, 256, 256, device=self.device
+            1, self.hparams.in_chans, 200, 200, device=self.device
         )
 
         self.dice_loss = DiceLoss(include_background=False)
