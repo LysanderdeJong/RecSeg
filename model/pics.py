@@ -63,7 +63,6 @@ class PICS(nn.Module):
         sensitivity_maps = (
             self.sens_net(y, mask) if self.use_sens_net else sensitivity_maps
         )
-        eta = torch.zeros_like(torch.from_numpy(sensitivity_maps))
         if "cuda" in str(self._device):
             eta = bart.bart(
                 1,
@@ -125,7 +124,6 @@ class PICSModule(pl.LightningModule):
     def forward(
         self, y, sensitivity_maps, mask, target,
     ):
-
         return self.model(y, sensitivity_maps, mask, target)
 
     def step(self, batch, batch_indx=None):

@@ -170,7 +170,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--gpus", nargs="+", default=[0], type=int, help="Which gpus to use."
+        "--gpus", nargs="+", default=None, type=int, help="Which gpus to use."
     )
 
     parser.add_argument(

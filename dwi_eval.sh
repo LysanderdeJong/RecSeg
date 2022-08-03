@@ -1,0 +1,12 @@
+cd /scratch/lgdejong/projects/RecSeg/
+conda activate thesis
+
+# python evaluate.py --model unet --dataset braindwi --progress_bar --precision 32 --batch_size 1 --data_root /data/projects/dwi_aisd/ --mri_data_path DWIs_nii/ --segmentation_path masks_DWI/ --in_chans 1 --out_chans 2 --chans 22 --project dwi-segmentation --gpus 1 --model_id 2l91xy97 --eval_mode segmentation --out_dir /data/projects/tecfidera/data/results/segmentation/eval_on_dwi/unet_3_7/h5/ --train_metric_only false
+
+# python evaluate.py --model unet --dataset braindwi --progress_bar --precision 32 --batch_size 1 --data_root /data/projects/dwi_aisd/ --mri_data_path DWIs_nii/ --segmentation_path masks_DWI/ --in_chans 1 --out_chans 2 --project dwi-segmentation --gpus 1 --model_id 2u8cjt30 --eval_mode segmentation --out_dir /data/projects/tecfidera/data/results/segmentation/eval_on_dwi/unet_7_8/h5/ --train_metric_only false
+
+# python evaluate.py --model attunet --dataset braindwi --progress_bar --precision 32 --batch_size 1 --data_root /data/projects/dwi_aisd/ --mri_data_path DWIs_nii/ --segmentation_path masks_DWI/ --in_chans 1 --out_chans 2 --project dwi-segmentation --gpus 1 --model_id 1kpu6ood --eval_mode segmentation --out_dir /data/projects/tecfidera/data/results/segmentation/eval_on_dwi/attunet_8_3/h5/ --train_metric_only false
+
+# python evaluate.py --model lambdaunet --dataset braindwi --progress_bar --precision 32 --batch_size 1 --data_root /data/projects/dwi_aisd/ --mri_data_path DWIs_nii/ --segmentation_path masks_DWI/ --in_chans 1 --out_chans 2 --project dwi-segmentation --gpus 1 --model_id 3tii7pvo --eval_mode segmentation --out_dir /data/projects/tecfidera/data/results/segmentation/eval_on_dwi/lambdaunet_2d_3_6/h5/ --train_metric_only false --tr 1 --num_slices 1
+
+python evaluate.py --model lambdaunet --dataset braindwi --progress_bar --precision 32 --batch_size 1 --data_root /data/projects/dwi_aisd/ --mri_data_path DWIs_nii/ --segmentation_path masks_DWI/ --in_chans 1 --out_chans 2 --project dwi-segmentation --gpus 1 --model_id 3b4wv7to --eval_mode segmentation --out_dir /data/projects/tecfidera/data/results/segmentation/eval_on_dwi/lambdaunet_3_6/h5/ --train_metric_only false --tr 3 --num_slices 3 --seq_len 3
