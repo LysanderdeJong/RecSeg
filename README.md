@@ -66,28 +66,28 @@ You should now have a working enviroment.
 
     RecSeg
     ├───model
-    │	├───attunet.py    # Contains the pytorch code and lighting module for the Attention U-net model.
-    │	├───cirim.py			  # Contains the pytorch code and lighting module for the CIRIM mri reconstruction model.
-    │	├───idslr.py			  # Contains the pytorch code and lighting module for the IDSLR srs model.
+    │	├───attunet.py      # Contains the pytorch code and lighting module for the Attention U-net model.
+    │	├───cirim.py        # Contains the pytorch code and lighting module for the CIRIM mri reconstruction model.
+    │	├───idslr.py        # Contains the pytorch code and lighting module for the IDSLR srs model.
     │	├───lambda_layer.py # Contains the pytorch code for the lambda+ layer.
-    │	├───pics.py				  # Contains the pytorch code and lighting module for the PI Compressed Sensing.
-    │	├───unet.py				  # Contains the pytorch code and lighting module for the Unet segmentation model.
-    │	├───unet3d.py			  # Contains the pytorch code and lighting module for the #D Unet segmentation model.
-    │	├───unetrecon.py		# Contains the pytorch code and lighting module for the Unet recontruction model.
-    │	├───vnet.py				  # Contains the pytorch code and lighting module for the Volumetric Unet segmentation model.
-    │	└───zf.py				    # Contains the pytorch code and lighting module to perform zero filled mri reconstruction.
-    ├───callbacks.py			# Contain Pytorch Lighting callbacks responable for logging during training to WandB.
-    ├───dataloader.py			# Contains code to create Lightning Data Modules for the SKM-TEA, Brain DWI and proprietairy 3D FLAIR brain MS dataset.
-    ├───datasets.py				# PyTorch Datasets used to read from disk.
-    ├───environment.yml		# Contain an conda enviroment used to write this projects.	
-    ├───evaluate.py				# Used to evaluate trained model. Results are saved along with performance metrics.
-    ├───h5_to_nii.py			# Used to convert results from evaluate.py to nifti files.
-    ├───losses.py				  # Contains Dice loss, Hausdorf Distance and Average Surface Distance.
-    ├───pl_model.py				# Combines the CIRIM and LambdaUnet into the RecSeg Lightning module.
-    ├───plots.ipynb				# Contains the code to generate comparisions plots.
-    ├───predict.py				# Use a trained model to perform prediction on new data.
-    ├───train.py				  # Contains the code to train various models from scratch.
-    └───utils.py				  # Contains fucntions to selects to specified model and dataset.
+    │	├───pics.py         # Contains the pytorch code and lighting module for the PI Compressed Sensing.
+    │	├───unet.py         # Contains the pytorch code and lighting module for the Unet segmentation model.
+    │	├───unet3d.py       # Contains the pytorch code and lighting module for the #D Unet segmentation model.
+    │	├───unetrecon.py    # Contains the pytorch code and lighting module for the Unet recontruction model.
+    │	├───vnet.py         # Contains the pytorch code and lighting module for the Volumetric Unet segmentation model.
+    │	└───zf.py           # Contains the pytorch code and lighting module to perform zero filled mri reconstruction.
+    ├───callbacks.py      # Contain Pytorch Lighting callbacks responable for logging during training to WandB.
+    ├───dataloader.py     # Contains code to create Lightning Data Modules for the SKM-TEA, Brain DWI and proprietairy 3D FLAIR brain MS dataset.
+    ├───datasets.py       # PyTorch Datasets used to read from disk.
+    ├───environment.yml   # Contain an conda enviroment used to write this projects.	
+    ├───evaluate.py       # Used to evaluate trained model. Results are saved along with performance metrics.
+    ├───h5_to_nii.py      # Used to convert results from evaluate.py to nifti files.
+    ├───losses.py         # Contains Dice loss, Hausdorf Distance and Average Surface Distance.
+    ├───pl_model.py       # Combines the CIRIM and LambdaUnet into the RecSeg Lightning module.
+    ├───plots.ipynb       # Contains the code to generate comparisions plots.
+    ├───predict.py        # Use a trained model to perform prediction on new data.
+    ├───train.py          # Contains the code to train various models from scratch.
+    └───utils.py          # Contains fucntions to selects to specified model and dataset.
 
 <!-- USAGE EXAMPLES -->
 ## Usage
