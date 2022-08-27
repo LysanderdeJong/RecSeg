@@ -12,7 +12,10 @@ from mridc.collections.reconstruction.parts.utils import apply_mask
 
 def pics_recon(kspace, sensitivity_maps, reg_wt=0.005, num_iters=60):
     return bart.bart(
-        1, f"pics -d0 -S -R W:7:0:{reg_wt} -i {num_iters}", kspace, sensitivity_maps,
+        1,
+        f"pics -d0 -S -R W:7:0:{reg_wt} -i {num_iters}",
+        kspace,
+        sensitivity_maps,
     )[0]
 
 

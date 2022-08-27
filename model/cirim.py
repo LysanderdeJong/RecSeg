@@ -258,7 +258,12 @@ class CIRIMModule(pl.LightningModule):
         ]
 
     def forward(
-        self, y, sensitivity_maps, mask, init_pred, target,
+        self,
+        y,
+        sensitivity_maps,
+        mask,
+        init_pred,
+        target,
     ):
 
         return self.model(y, sensitivity_maps, mask, init_pred, target)

@@ -294,7 +294,11 @@ class BrainDWIDataModule(pl.LightningDataModule):
 
 class TecFideraDataModule(pl.LightningDataModule):
     def __init__(
-        self, data_root, seq_len=1, use_cache=True, **kwargs,
+        self,
+        data_root,
+        seq_len=1,
+        use_cache=True,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -376,7 +380,10 @@ class TecFideraDataModule(pl.LightningDataModule):
             help="Path to the data root",
         )
         parser.add_argument(
-            "--seg_root", default=None, type=str, help="Path to the segmentations root",
+            "--seg_root",
+            default=None,
+            type=str,
+            help="Path to the segmentations root",
         )
         parser.add_argument(
             "--seq_len", default=1, type=int, help="Size of the slice looked at."
@@ -416,7 +423,9 @@ class TecFideraDataModule(pl.LightningDataModule):
 
 class TecFideraMRIDataModule(pl.LightningDataModule):
     def __init__(
-        self, data_root, **kwargs,
+        self,
+        data_root,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -541,7 +550,10 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
             help="Center fraction of the mask",
         )
         parser.add_argument(
-            "--mask_center_scale", type=float, default=0.02, help="Mask center scale",
+            "--mask_center_scale",
+            type=float,
+            default=0.02,
+            help="Mask center scale",
         )
         parser.add_argument(
             "--normalize_inputs",
@@ -590,7 +602,10 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
         )
 
         parser.add_argument(
-            "--seq_len", default=1, type=int, help="Number of slices to read at once.",
+            "--seq_len",
+            default=1,
+            type=int,
+            help="Number of slices to read at once.",
         )
 
         parser.add_argument(
@@ -623,7 +638,10 @@ class TecFideraMRIDataModule(pl.LightningDataModule):
 
 class SKMTEAMRIDataModule(pl.LightningDataModule):
     def __init__(
-        self, data_root, annotation_path=None, **kwargs,
+        self,
+        data_root,
+        annotation_path=None,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -766,7 +784,10 @@ class SKMTEAMRIDataModule(pl.LightningDataModule):
             help="Center fraction of the mask",
         )
         parser.add_argument(
-            "--mask_center_scale", type=float, default=0.02, help="Mask center scale",
+            "--mask_center_scale",
+            type=float,
+            default=0.02,
+            help="Mask center scale",
         )
         parser.add_argument(
             "--normalize_inputs",
@@ -815,7 +836,10 @@ class SKMTEAMRIDataModule(pl.LightningDataModule):
         )
 
         parser.add_argument(
-            "--seq_len", default=1, type=int, help="Number of slices to read at once.",
+            "--seq_len",
+            default=1,
+            type=int,
+            help="Number of slices to read at once.",
         )
 
         parser.add_argument(

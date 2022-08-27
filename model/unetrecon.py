@@ -62,7 +62,12 @@ class UNetRecon(nn.Module):
         return y, mask, r
 
     def forward(
-        self, y, sensitivity_maps, mask, init_pred, target,
+        self,
+        y,
+        sensitivity_maps,
+        mask,
+        init_pred,
+        target,
     ):
         sensitivity_maps = (
             self.sens_net(y, mask) if self.use_sens_net else sensitivity_maps
@@ -123,7 +128,12 @@ class UnetReconModule(pl.LightningModule):
         ]
 
     def forward(
-        self, y, sensitivity_maps, mask, init_pred, target,
+        self,
+        y,
+        sensitivity_maps,
+        mask,
+        init_pred,
+        target,
     ):
 
         return self.model(y, sensitivity_maps, mask, init_pred, target)
@@ -242,10 +252,16 @@ class UnetReconModule(pl.LightningModule):
             help="Number of top-level U-Net filters.",
         )
         parser.add_argument(
-            "--num_pools", default=2, type=int, help="Number of U-Net pooling layers.",
+            "--num_pools",
+            default=2,
+            type=int,
+            help="Number of U-Net pooling layers.",
         )
         parser.add_argument(
-            "--padding_size", default=11, type=int, help="Size of the padding applied",
+            "--padding_size",
+            default=11,
+            type=int,
+            help="Size of the padding applied",
         )
 
         parser.add_argument(

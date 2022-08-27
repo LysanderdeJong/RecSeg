@@ -38,7 +38,12 @@ class DeepLab(nn.Module):
 
 class DeepLabModule(pl.LightningModule):
     def __init__(
-        self, in_chans=1, out_chans=1, lr=0.001, weight_decay=0.0, **kwargs,
+        self,
+        in_chans=1,
+        out_chans=1,
+        lr=0.001,
+        weight_decay=0.0,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters()

@@ -111,7 +111,10 @@ class MC_CrossEntropy(nn.Module):
         )
 
     def forward(
-        self, pred_mean, target, pred_log_var=None,
+        self,
+        pred_mean,
+        target,
+        pred_log_var=None,
     ):
         if self.mc_samples == 1 or pred_log_var is None:
             return self.cross_entropy(pred_mean, target).mean()
@@ -172,4 +175,3 @@ def binerize_segmentation(tensor):
     for i in range(tensor.shape[1]):
         binairy_tensor[:, i, ...] = tensor_label == i
     return binairy_tensor.byte()
-

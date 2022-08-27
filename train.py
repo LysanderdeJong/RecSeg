@@ -58,7 +58,9 @@ def train(args):
     if args.wandb:
         os.environ["WANDB_CACHE_DIR"] = "/scratch/lgdejong/.cache/wandb/"
         wandb_logger = WandbLogger(
-            project=args.project, log_model="all", entity="lysander",
+            project=args.project,
+            log_model="all",
+            entity="lysander",
         )
 
         if args.dataset == "skmtea":

@@ -89,7 +89,8 @@ def setup(args):
             state_dict_copy[new_key] = state_dict[key]
 
         model.load_state_dict(
-            state_dict_copy, strict=True,
+            state_dict_copy,
+            strict=True,
         )
     evalutaion_pipeline = Evaluate(args, trainer, model, dataset)
     evalutaion_pipeline.predict_loop()
@@ -471,11 +472,17 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--model_id", default=None, type=str, help="Retieve the checkpoint from wandb.",
+        "--model_id",
+        default=None,
+        type=str,
+        help="Retieve the checkpoint from wandb.",
     )
 
     parser.add_argument(
-        "--out_dir", default=None, type=str, help="Path to save the results",
+        "--out_dir",
+        default=None,
+        type=str,
+        help="Path to save the results",
     )
 
     parser.add_argument(
@@ -487,7 +494,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--mc_samples", default=1, type=int, help="Number of MC dropout samples.",
+        "--mc_samples",
+        default=1,
+        type=int,
+        help="Number of MC dropout samples.",
     )
 
     # other hyperparameters
