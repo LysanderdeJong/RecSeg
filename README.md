@@ -66,7 +66,7 @@ You should now have a working enviroment.
 
     RecSeg
     ├───model
-    │	├───attunet.py  # Contains the pytorch code and lighting module for the Attention U-net model.
+    │	├───attunet.py    # Contains the pytorch code and lighting module for the Attention U-net model.
     │	├───cirim.py			  # Contains the pytorch code and lighting module for the CIRIM mri reconstruction model.
     │	├───idslr.py			  # Contains the pytorch code and lighting module for the IDSLR srs model.
     │	├───lambda_layer.py # Contains the pytorch code for the lambda+ layer.
