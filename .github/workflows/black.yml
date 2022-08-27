@@ -8,5 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: psf/black@stable
+        with:
+          options: "--diff"
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v4
