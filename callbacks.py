@@ -343,7 +343,11 @@ class LogUncertaintyTECFIDERA(pl.Callback):
             captions = []
             # print(len(self.inputs), len(self.uncertaity), len(self.metrics))
             for i, (input, uncertainty, metric) in enumerate(
-                zip(self.inputs, self.uncertaity, self.metrics,)
+                zip(
+                    self.inputs,
+                    self.uncertaity,
+                    self.metrics,
+                )
             ):
                 image = input[0, ...]
                 image = image / image.amax()
@@ -505,7 +509,13 @@ class LogIntermediateReconstruction(pl.Callback):
 
     @rank_zero_only
     def on_validation_batch_end(
-        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx,
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+        batch_idx,
+        dataloader_idx,
     ) -> None:
         (
             y,

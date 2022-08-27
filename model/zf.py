@@ -47,7 +47,12 @@ class ZF(nn.Module):
         return y, mask, r
 
     def forward(
-        self, y, sensitivity_maps, mask, init_pred, target,
+        self,
+        y,
+        sensitivity_maps,
+        mask,
+        init_pred,
+        target,
     ):
         sensitivity_maps = (
             self.sens_net(y, mask) if self.use_sens_net else sensitivity_maps
@@ -99,7 +104,12 @@ class ZFModule(pl.LightningModule):
         ]
 
     def forward(
-        self, y, sensitivity_maps, mask, init_pred, target,
+        self,
+        y,
+        sensitivity_maps,
+        mask,
+        init_pred,
+        target,
     ):
 
         return self.model(y, sensitivity_maps, mask, init_pred, target)

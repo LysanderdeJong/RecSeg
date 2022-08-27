@@ -136,9 +136,17 @@ class brain_dwi(Dataset):
         self.mri_data_path = mri_data_path
         self.segmentation_path = segmentation_path
         self.seq_len = seq_len
-        self.input_transform = transforms.Resize([256,], antialias=True,)
+        self.input_transform = transforms.Resize(
+            [
+                256,
+            ],
+            antialias=True,
+        )
         self.target_transform = transforms.Resize(
-            [256,], interpolation=transforms.InterpolationMode.NEAREST,
+            [
+                256,
+            ],
+            interpolation=transforms.InterpolationMode.NEAREST,
         )
 
         cache_file = f"./.cache/dwi_cache_{split}.pkl"
@@ -261,9 +269,13 @@ class TecFidera(Dataset):
         self.seg_root = data_root if seg_root is None else seg_root
         self.seq_len = seq_len
         self.compact_masks = compact_masks
-        self.input_transform = transforms.Resize([256, 256], antialias=True,)
+        self.input_transform = transforms.Resize(
+            [256, 256],
+            antialias=True,
+        )
         self.target_transform = transforms.Resize(
-            [256, 256], interpolation=transforms.InterpolationMode.NEAREST,
+            [256, 256],
+            interpolation=transforms.InterpolationMode.NEAREST,
         )
 
         cache_file = f"./.cache/tecfidera_cache_{split}.pkl"

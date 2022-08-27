@@ -643,7 +643,10 @@ class IDSLRModule(pl.LightningModule):
             "--chans", default=32, type=int, help="Number of top-level U-Net filters."
         )
         parser.add_argument(
-            "--num_pools", default=4, type=int, help="Number of U-Net pooling layers.",
+            "--num_pools",
+            default=4,
+            type=int,
+            help="Number of U-Net pooling layers.",
         )
         parser.add_argument(
             "--drop_prob", default=0.0, type=float, help="U-Net dropout probability"
@@ -661,7 +664,10 @@ class IDSLRModule(pl.LightningModule):
             help="Number of times to apply the model.",
         )
         parser.add_argument(
-            "--num_cascades", default=1, type=int, help="Number of models to cascade.",
+            "--num_cascades",
+            default=1,
+            type=int,
+            help="Number of models to cascade.",
         )
         parser.add_argument(
             "--normalize",

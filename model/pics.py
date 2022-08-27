@@ -58,7 +58,11 @@ class PICS(nn.Module):
         return y, mask, r
 
     def forward(
-        self, y, sensitivity_maps, mask, target,
+        self,
+        y,
+        sensitivity_maps,
+        mask,
+        target,
     ):
         sensitivity_maps = (
             self.sens_net(y, mask) if self.use_sens_net else sensitivity_maps
@@ -122,7 +126,11 @@ class PICSModule(pl.LightningModule):
         ]
 
     def forward(
-        self, y, sensitivity_maps, mask, target,
+        self,
+        y,
+        sensitivity_maps,
+        mask,
+        target,
     ):
         return self.model(y, sensitivity_maps, mask, target)
 
@@ -259,7 +267,10 @@ class PICSModule(pl.LightningModule):
 
         # network params
         parser.add_argument(
-            "--reg_wt", type=float, default=0.005, help="Regularization strenght",
+            "--reg_wt",
+            type=float,
+            default=0.005,
+            help="Regularization strenght",
         )
         parser.add_argument(
             "--num_iters",

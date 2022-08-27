@@ -27,7 +27,8 @@ def retrieve_checkpoint(
 
 class RecSegModule(pl.LightningModule):
     def __init__(
-        self, **kwargs,
+        self,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters()
